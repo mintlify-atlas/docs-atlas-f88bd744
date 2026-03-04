@@ -520,10 +520,8 @@ pub fn get_intent_mut(
 ### Value Limits
 
 <Warning>
-Intent values are currently limited to u64::MAX (~18.4 ETH in wei). Values exceeding this are rejected (src/transaction.rs:418-430, 553-567, 613-625).
+Intent values are currently limited to u64::MAX (~18.4 ETH in wei). Values exceeding this are rejected (src/transaction.rs:418-430, 553-567, 613-625). Future versions may support U256 for arbitrary values.
 </Warning>
-
-TODO: Migrate to U256 for arbitrary values.
 
 ### Nonce Validation
 

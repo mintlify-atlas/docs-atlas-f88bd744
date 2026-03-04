@@ -311,6 +311,49 @@ core-lane-node send-bundle \
   Bundle marker: `head` (priority) or `standard`
 </ParamField>
 
+### Store Blob
+
+Store arbitrary data on Core Lane via the blob storage system:
+
+```bash
+core-lane-node store-blob \
+  --rpc-url http://127.0.0.1:8545 \
+  --contract 0x0000000000000000000000000000000000000045 \
+  --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
+  --file ./data.bin \
+  --max-fee-per-gas 1000000000
+```
+
+**Parameters**:
+
+<ParamField path="--rpc-url" type="string" default="http://127.0.0.1:8546">
+  Core Lane RPC URL
+</ParamField>
+
+<ParamField path="--contract" type="address" default="0x0000000000000000000000000000000000000045">
+  IntentSystem contract address
+</ParamField>
+
+<ParamField path="--private-key" type="string" required>
+  Private key for signing the transaction (hex format with 0x prefix)
+</ParamField>
+
+<ParamField path="--file" type="string" required>
+  Path to file containing data to store
+</ParamField>
+
+<ParamField path="--max-fee-per-gas" type="integer">
+  Maximum fee per gas unit (in wei)
+</ParamField>
+
+<ParamField path="--max-priority-fee-per-gas" type="integer" default="0">
+  Maximum priority fee per gas (in wei)
+</ParamField>
+
+<Note>
+Blobs are stored on-chain and can be referenced in intents via their hash. Useful for storing program code or large intent parameters.
+</Note>
+
 ## Bitcoin Cache Server
 
 Run a caching Bitcoin RPC proxy for improved performance:
@@ -370,6 +413,136 @@ core-lane-node bitcoin-cache \
 <ParamField path="--s3-endpoint" type="string">
   Custom S3 endpoint URL
 </ParamField>
+
+## Wallet Management
+
+### Create Wallet
+
+Create a new BDK wallet database with a mnemonic:
+
+```bash
+core-lane-node create-wallet \
+  --network regtest
+```
+
+**Parameters**:
+
+<ParamField path="--network" type="string" default="regtest">
+  Network: `bitcoin`, `testnet`, `testnet4`, `signet`, or `regtest`
+</ParamField>
+
+<ParamField path="--mnemonic" type="string">
+  Optional mnemonic phrase to restore existing wallet (12 or 24 words)
+</ParamField>
+
+<ParamField path="--mnemonic-only" type="boolean" default="false">
+  Only generate and output mnemonic without creating database file
+</ParamField>
+
+<ParamField path="--electrum-url" type="string">
+  Electrum server URL for non-regtest networks. Performs initial full scan during creation.
+</ParamField>
+
+**Output**: Mnemonic phrase and wallet database file (`wallet_<network>.sqlite3`).
+
+<Warning>
+Store the mnemonic phrase securely. It's required for all operations and cannot be recovered if lost.
+</Warning>
+
+### Get Wallet Address
+
+Retrieve the wallet's receiving address:
+
+```bash
+core-lane-node get-address \
+  --network regtest \
+  --mnemonic-file .mnemonic
+```
+
+**Parameters**:
+
+<ParamField path="--network" type="string" default="regtest">
+  Network of the wallet to load
+</ParamField>
+
+<ParamField path="--mnemonic" type="string">
+  Mnemonic phrase (not recommended - visible in process list)
+</ParamField>
+
+<ParamField path="--mnemonic-file" type="string">
+  Path to file containing mnemonic phrase (recommended)
+</ParamField>
+
+### Get Bitcoin Balance
+
+Check wallet's Bitcoin balance:
+
+```bash
+core-lane-node get-bitcoin-balance \
+  --network regtest \
+  --mnemonic-file .mnemonic \
+  --rpc-url http://127.0.0.1:18443 \
+  --rpc-user bitcoin \
+  --rpc-password bitcoin123
+```
+
+**For Regtest**:
+
+<ParamField path="--rpc-url" type="string" default="http://127.0.0.1:18443">
+  Bitcoin RPC URL
+</ParamField>
+
+<ParamField path="--rpc-user" type="string">
+  Bitcoin RPC username
+</ParamField>
+
+<ParamField path="--rpc-password" type="string">
+  Bitcoin RPC password
+</ParamField>
+
+**For Mainnet/Testnet**:
+
+<ParamField path="--electrum-url" type="string">
+  Electrum server URL (e.g., `ssl://electrum.blockstream.info:50002`)
+</ParamField>
+
+**Output**:
+- Total balance
+- Confirmed balance
+- Unconfirmed balance
+- Amounts in both satoshis and BTC
+
+### Construct Exit Intent
+
+Create an AnchorBitcoinFill intent for withdrawing to Bitcoin L1:
+
+```bash
+core-lane-node construct-exit-intent \
+  --bitcoin-address bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh \
+  --amount 100000 \
+  --max-fee 1000 \
+  --expire-by 1735689600
+```
+
+**Parameters**:
+
+<ParamField path="--bitcoin-address" type="string" required>
+  Destination Bitcoin address
+</ParamField>
+
+<ParamField path="--amount" type="integer" required>
+  Amount in satoshis to withdraw
+</ParamField>
+
+<ParamField path="--max-fee" type="integer" default="1000">
+  Maximum fee in satoshis willing to pay solver
+</ParamField>
+
+<ParamField path="--expire-by" type="integer" required>
+  Unix timestamp when intent expires
+</ParamField>
+
+**Output**: CBOR-encoded intent data ready for submission via `intent()` call.
 
 ## Monitoring and Logs
 
