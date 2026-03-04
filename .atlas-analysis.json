@@ -1,0 +1,123 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "Core Lane",
+  "projectDescription": "A Bitcoin-anchored blockchain execution environment with Taproot DA and intent-based transactions",
+  "theme": "aspen",
+  "primaryColor": "#f7931a",
+  "lightColor": "#ffa940",
+  "darkColor": "#d87607",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": ["introduction", "quickstart"]
+          },
+          {
+            "group": "Setup & Deployment",
+            "pages": [
+              "setup/installation",
+              "setup/configuration",
+              "setup/running-a-node",
+              "setup/development-environment"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/bitcoin-anchoring",
+              "concepts/taproot-da",
+              "concepts/intent-system",
+              "concepts/state-management",
+              "concepts/transaction-processing"
+            ]
+          },
+          {
+            "group": "Node Operations",
+            "pages": [
+              "operations/node-configuration",
+              "operations/monitoring",
+              "operations/maintenance",
+              "operations/troubleshooting"
+            ]
+          },
+          {
+            "group": "Library Integration",
+            "pages": [
+              "library/getting-started",
+              "library/state-manager",
+              "library/transaction-execution",
+              "library/bitcoin-client"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "JSON-RPC API",
+            "pages": [
+              "api/overview",
+              "api/ethereum-compatible",
+              "api/core-lane-methods"
+            ]
+          },
+          {
+            "group": "Rust Library API",
+            "pages": [
+              "api/library/core-types",
+              "api/library/state-management",
+              "api/library/transaction-processing",
+              "api/library/intents",
+              "api/library/bitcoin-rpc"
+            ]
+          },
+          {
+            "group": "Intent System",
+            "pages": [
+              "api/intents/overview",
+              "api/intents/anchor-bitcoin-fill",
+              "api/intents/risc-v-programs"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Bitcoin-anchored execution environment",
+    "Taproot DA for data availability on Bitcoin",
+    "Intent-based transaction system with cross-chain operations",
+    "Ethereum-compatible JSON-RPC API",
+    "EIP-1559 fee management",
+    "RISC-V program execution via Cartesi Machine",
+    "State management with account and transaction tracking",
+    "BDK wallet integration for Bitcoin operations"
+  ],
+  "publicApiSurface": [
+    "StateManager",
+    "BundleStateManager",
+    "CoreLaneAccount",
+    "execute_transaction",
+    "Intent",
+    "IntentSystem",
+    "AnchorBitcoinFill",
+    "RiscVProgramIntent",
+    "TaprootDA",
+    "BitcoinRpcClient",
+    "CoreLaneStateForLib",
+    "TransactionReceipt",
+    "CoreLaneBundle",
+    "BundleMarker",
+    "eth_getBalance",
+    "eth_sendRawTransaction",
+    "eth_getTransactionReceipt",
+    "eth_blockNumber",
+    "core_lane_getIntent",
+    "core_lane_submitBundle"
+  ]
+}
