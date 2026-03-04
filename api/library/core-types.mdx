@@ -1,0 +1,258 @@
+---
+title: "Core Types"
+description: "Core data structures and types used throughout the Core Lane library"
+---
+
+## Overview
+
+Core Lane provides fundamental data structures for accounts, transactions, and receipts. These types form the foundation of state management and transaction processing.
+
+## CoreLaneAccount
+
+Represents a Core Lane account with balance and nonce tracking.
+
+**Location:** `src/account.rs:8`
+
+### Structure
+
+```rust
+pub struct CoreLaneAccount {
+    pub balance: U256,
+    pub nonce: U256,
+}
+```
+
+### Methods
+
+<ParamField path="new" type="fn() -> Self">
+  Creates a new account with zero balance and nonce.
+</ParamField>
+
+<ParamField path="with_balance" type="fn(balance: U256) -> Self">
+  Creates a new account with the specified balance and zero nonce.
+  
+  **Parameters:**
+  - `balance`: Initial balance for the account
+</ParamField>
+
+<ParamField path="increment_nonce" type="fn(&mut self) -> Result<()>">
+  Increments the account nonce by 1. Returns an error if nonce would overflow.
+</ParamField>
+
+<ParamField path="add_balance" type="fn(&mut self, amount: U256) -> Result<()>">
+  Adds the specified amount to the account balance.
+  
+  **Parameters:**
+  - `amount`: Amount to add to the balance
+  
+  **Returns:** Error if balance would overflow
+</ParamField>
+
+<ParamField path="sub_balance" type="fn(&mut self, amount: U256) -> Result<()>">
+  Subtracts the specified amount from the account balance.
+  
+  **Parameters:**
+  - `amount`: Amount to subtract from the balance
+  
+  **Returns:** Error if insufficient balance or underflow would occur
+</ParamField>
+
+### Example
+
+```rust
+use core_lane::CoreLaneAccount;
+use alloy_primitives::U256;
+
+let mut account = CoreLaneAccount::new();
+account.add_balance(U256::from(1000))?;
+account.increment_nonce()?;
+
+assert_eq!(account.balance, U256::from(1000));
+assert_eq!(account.nonce, U256::from(1));
+```
+
+## TransactionReceipt
+
+Receipt generated after transaction execution.
+
+**Location:** `src/state.rs:32`
+
+### Structure
+
+```rust
+pub struct TransactionReceipt {
+    pub transaction_hash: String,
+    pub block_number: u64,
+    pub transaction_index: u64,
+    pub from: String,
+    pub to: Option<String>,
+    pub cumulative_gas_used: String,
+    pub gas_used: String,
+    pub contract_address: Option<String>,
+    pub logs: Vec<Log>,
+    pub status: String,
+    pub effective_gas_price: String,
+    pub tx_type: String,
+    pub logs_bloom: String,
+}
+```
+
+### Fields
+
+<ParamField path="transaction_hash" type="String">
+  Hash of the executed transaction
+</ParamField>
+
+<ParamField path="block_number" type="u64">
+  Block number where transaction was included
+</ParamField>
+
+<ParamField path="from" type="String">
+  Address that sent the transaction
+</ParamField>
+
+<ParamField path="to" type="Option<String>">
+  Recipient address (None for contract creation)
+</ParamField>
+
+<ParamField path="status" type="String">
+  Transaction execution status ("1" for success, "0" for failure)
+</ParamField>
+
+<ParamField path="logs" type="Vec<Log>">
+  Event logs emitted during execution
+</ParamField>
+
+## Log
+
+Event log emitted during transaction execution.
+
+**Location:** `src/state.rs:14`
+
+### Structure
+
+```rust
+pub struct Log {
+    pub address: String,
+    pub topics: Vec<String>,
+    pub data: String,
+    pub block_number: String,
+    pub transaction_hash: String,
+    pub transaction_index: String,
+    pub block_hash: String,
+    pub log_index: String,
+    pub removed: bool,
+}
+```
+
+## StoredTransaction
+
+Transaction stored in state with metadata.
+
+**Location:** `src/state.rs:49`
+
+### Structure
+
+```rust
+pub struct StoredTransaction {
+    pub envelope: TxEnvelope,
+    pub raw_data: Vec<u8>,
+    pub block_number: u64,
+}
+```
+
+### Fields
+
+<ParamField path="envelope" type="TxEnvelope">
+  Decoded transaction envelope (Legacy, EIP-1559, EIP-2930, or EIP-4844)
+</ParamField>
+
+<ParamField path="raw_data" type="Vec<u8>">
+  Raw transaction bytes for hash calculation
+</ParamField>
+
+<ParamField path="block_number" type="u64">
+  Block number where transaction was included
+</ParamField>
+
+## CoreLaneStateForLib
+
+Simplified state context for external applications.
+
+**Location:** `src/lib.rs:84`
+
+### Structure
+
+```rust
+pub struct CoreLaneStateForLib {
+    account_manager: StateManager,
+    bitcoin_client_read: Arc<dyn BitcoinRpcReadClient>,
+    bitcoin_client_write: Arc<BitcoinRpcClient>,
+    bitcoin_network: bitcoin::Network,
+}
+```
+
+### Methods
+
+<ParamField path="new" type="fn">
+  ```rust
+  pub fn new(
+      state_manager: StateManager,
+      bitcoin_client_read: Arc<dyn BitcoinRpcReadClient>,
+      bitcoin_client_write: Arc<BitcoinRpcClient>,
+      network: bitcoin::Network,
+  ) -> Self
+  ```
+  
+  Creates a new state context with Bitcoin RPC clients.
+</ParamField>
+
+<ParamField path="replace_state_manager" type="fn(&mut self, new_state: StateManager)">
+  Replaces the internal state manager with a new one. Useful when applying changes to a StateManager.
+</ParamField>
+
+### Example
+
+```rust
+use core_lane::{CoreLaneStateForLib, StateManager};
+use core_lane::{create_bitcoin_rpc_client, BitcoinRpcClient};
+use std::sync::Arc;
+
+let rpc_client = create_bitcoin_rpc_client(
+    "http://127.0.0.1:18443",
+    "user",
+    "pass"
+)?;
+
+let mut state = CoreLaneStateForLib::new(
+    StateManager::new(),
+    rpc_client.clone(),
+    rpc_client,
+    bitcoin::Network::Regtest
+);
+```
+
+## Re-exported Types
+
+The following types are re-exported from external crates for convenience:
+
+### From alloy_primitives
+
+- `Address` - Ethereum address (20 bytes)
+- `Bytes` - Dynamic byte array
+- `B256` - 256-bit hash
+- `U256` - 256-bit unsigned integer
+
+### From alloy_consensus
+
+- `TxEnvelope` - Transaction envelope supporting Legacy, EIP-1559, EIP-2930, and EIP-4844 transactions
+
+### Example
+
+```rust
+use core_lane::{Address, U256, B256, Bytes};
+
+let address = Address::from([0x42; 20]);
+let amount = U256::from(1_000_000);
+let hash = B256::from([0xff; 32]);
+```

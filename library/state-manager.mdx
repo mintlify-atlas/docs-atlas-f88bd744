@@ -1,0 +1,275 @@
+---
+title: 'State Manager'
+description: 'Managing account state and transaction bundles'
+---
+
+Core Lane provides two complementary state management types: `StateManager` for persistent state and `BundleStateManager` for staging changes.
+
+## StateManager
+
+`StateManager` is the persistent state store that holds:
+
+- Account balances and nonces
+- Stored blobs (for RISC-V program intents)
+- Key-value storage
+- Intents and their status
+- Transaction history and receipts
+
+### Creating a State Manager
+
+```rust
+use core_lane::{StateManager, Address, U256};
+
+let state = StateManager::new();
+
+// Query account information
+let address = Address::from([0x42; 20]);
+let balance = state.get_balance(address);
+let nonce = state.get_nonce(address);
+
+assert_eq!(balance, U256::ZERO); // New accounts start at zero
+assert_eq!(nonce, U256::ZERO);
+```
+
+### State Queries
+
+```rust
+// Account information
+let account = state.get_account(address);
+let balance = state.get_balance(address);
+let nonce = state.get_nonce(address);
+
+// Blobs (for RISC-V programs)
+let blob_hash = B256::from([0xff; 32]);
+let exists = state.contains_blob(&blob_hash);
+let data = state.get_blob(&blob_hash);
+
+// Intents
+let intent_id = B256::from([0xaa; 32]);
+let intent = state.get_intent(&intent_id);
+
+// Transactions
+let transactions = state.get_transactions();
+let receipt = state.get_receipt("0x123...");
+
+// Key-value storage
+let value = state.get_kv("my_key");
+```
+
+### Applying Changes
+
+The `StateManager` is immutable - changes are applied via `BundleStateManager`:
+
+```rust
+let mut bundle = BundleStateManager::new();
+bundle.add_balance(&state, address, U256::from(1000))?;
+
+// Apply bundle to create new state
+let mut new_state = state;
+new_state.apply_changes(bundle);
+
+assert_eq!(new_state.get_balance(address), U256::from(1000));
+```
+
+## BundleStateManager
+
+`BundleStateManager` is a staging area for batching state changes. It overlays modifications on top of a base `StateManager` without mutating it.
+
+### Creating a Bundle
+
+```rust
+use core_lane::{StateManager, BundleStateManager, Address, U256};
+
+let state = StateManager::new();
+let mut bundle = BundleStateManager::new();
+```
+
+### Account Operations
+
+```rust
+let address = Address::from([0x42; 20]);
+
+// Add balance
+bundle.add_balance(&state, address, U256::from(1000))?;
+
+// Subtract balance (fails if insufficient)
+bundle.sub_balance(&state, address, U256::from(500))?;
+
+// Increment nonce
+bundle.increment_nonce(&state, address)?;
+
+// Query within bundle (includes pending changes)
+let balance = bundle.get_balance(&state, address);
+let nonce = bundle.get_nonce(&state, address);
+```
+
+### Working with Blobs
+
+```rust
+use alloy_primitives::{keccak256, Bytes};
+
+let data = vec![1, 2, 3, 4];
+let blob_hash = keccak256(&data);
+
+// Store blob
+bundle.insert_blob(blob_hash, data.clone());
+
+// Check existence (checks both bundle and original state)
+let exists = bundle.contains_blob(&state, &blob_hash);
+```
+
+### Intent Management
+
+```rust
+use core_lane::{Intent, IntentStatus, IntentCommandType, Bytes};
+
+let intent_id = B256::from([0xaa; 32]);
+let intent = Intent {
+    data: Bytes::from(vec![1, 2, 3]),
+    value: 1000,
+    status: IntentStatus::Submitted,
+    last_command: IntentCommandType::Created,
+    creator: Address::from([0x01; 20]),
+};
+
+// Insert intent
+bundle.insert_intent(intent_id, intent);
+
+// Get intent (falls back to original state if not in bundle)
+let intent = bundle.get_intent(&state, &intent_id);
+
+// Get mutable reference (copies from original if needed)
+if let Some(intent_mut) = bundle.get_intent_mut(&state, &intent_id) {
+    intent_mut.status = IntentStatus::Locked(Address::from([0x02; 20]));
+}
+```
+
+### Key-Value Storage
+
+```rust
+// Insert key-value
+bundle.insert_kv("my_key".to_string(), vec![1, 2, 3]);
+
+// Get value (checks bundle first, then original state)
+let value = bundle.get_kv("my_key");
+
+// Remove key
+bundle.remove_kv("my_key");
+```
+
+### Transaction Storage
+
+```rust
+use core_lane::{StoredTransaction, TransactionReceipt};
+use alloy_consensus::TxEnvelope;
+
+// Add transaction
+let stored_tx = StoredTransaction {
+    envelope: tx_envelope,
+    raw_data: raw_tx_bytes,
+    block_number: 100,
+};
+bundle.add_transaction(stored_tx);
+
+// Add receipt
+let receipt = TransactionReceipt {
+    transaction_hash: "0x123...".to_string(),
+    block_number: 100,
+    transaction_index: 0,
+    from: "0xabc...".to_string(),
+    to: Some("0xdef...".to_string()),
+    cumulative_gas_used: "21000".to_string(),
+    gas_used: "21000".to_string(),
+    contract_address: None,
+    logs: vec![],
+    status: "0x1".to_string(),
+    effective_gas_price: "1000000000".to_string(),
+    tx_type: "0x2".to_string(),
+    logs_bloom: "0x00...".to_string(),
+};
+bundle.add_receipt("0x123...".to_string(), receipt);
+```
+
+## Serialization
+
+Both `StateManager` and `BundleStateManager` support Borsh serialization:
+
+### StateManager Serialization
+
+```rust
+use anyhow::Result;
+
+fn save_state(state: &StateManager) -> Result<Vec<u8>> {
+    state.borsh_serialize()
+}
+
+fn load_state(bytes: &[u8]) -> Result<StateManager> {
+    StateManager::borsh_deserialize(bytes)
+}
+```
+
+### BundleStateManager Serialization
+
+```rust
+fn save_bundle(bundle: &BundleStateManager) -> Result<Vec<u8>> {
+    bundle.borsh_serialize()
+}
+
+fn load_bundle(bytes: &[u8]) -> Result<BundleStateManager> {
+    BundleStateManager::borsh_deserialize(bytes)
+}
+```
+
+## Complete Example
+
+Here's a complete example showing the state management workflow:
+
+```rust
+use core_lane::{StateManager, BundleStateManager, Address, U256};
+use anyhow::Result;
+
+fn main() -> Result<()> {
+    // Initialize state
+    let mut state = StateManager::new();
+    let address = Address::from([0x42; 20]);
+    
+    // Create a bundle for changes
+    let mut bundle = BundleStateManager::new();
+    
+    // Add balance and increment nonce
+    let amount = U256::from(1_000_000_000_000_000_000u128); // 1 ETH
+    bundle.add_balance(&state, address, amount)?;
+    bundle.increment_nonce(&state, address)?;
+    
+    // Check bundle state (before committing)
+    assert_eq!(bundle.get_balance(&state, address), amount);
+    assert_eq!(bundle.get_nonce(&state, address), U256::from(1));
+    
+    // Original state is unchanged
+    assert_eq!(state.get_balance(address), U256::ZERO);
+    assert_eq!(state.get_nonce(address), U256::ZERO);
+    
+    // Apply changes
+    state.apply_changes(bundle);
+    
+    // Verify changes are applied
+    assert_eq!(state.get_balance(address), amount);
+    assert_eq!(state.get_nonce(address), U256::from(1));
+    
+    // Serialize state
+    let serialized = state.borsh_serialize()?;
+    println!("Serialized state: {} bytes", serialized.len());
+    
+    // Deserialize state
+    let restored = StateManager::borsh_deserialize(&serialized)?;
+    assert_eq!(restored.get_balance(address), amount);
+    assert_eq!(restored.get_nonce(address), U256::from(1));
+    
+    Ok(())
+}
+```
+
+## See Also
+
+- [Transaction Execution](/library/transaction-execution) - Use state managers with transaction processing
+- [Getting Started](/library/getting-started) - Library setup and basic usage

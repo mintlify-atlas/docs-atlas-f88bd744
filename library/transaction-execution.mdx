@@ -1,0 +1,308 @@
+---
+title: 'Transaction Execution'
+description: 'Processing Core Lane transactions with the execution engine'
+---
+
+The `execute_transaction()` function processes Core Lane transactions, validating signatures, nonces, and balances before applying state changes.
+
+## Basic Execution
+
+```rust
+use core_lane::{
+    execute_transaction, TxEnvelope, Address,
+    BundleStateManager, CoreLaneStateForLib, StateManager
+};
+use anyhow::Result;
+
+fn process_transaction(
+    tx: &TxEnvelope,
+    sender: Address,
+    state: &mut CoreLaneStateForLib,
+) -> Result<()> {
+    let mut bundle = BundleStateManager::new();
+    let block_timestamp = 1704067200; // Unix timestamp
+    
+    let result = execute_transaction(
+        tx,
+        sender,
+        &mut bundle,
+        state,
+        block_timestamp
+    )?;
+    
+    if result.success {
+        println!("Transaction succeeded!");
+        println!("Gas used: {}", result.gas_used);
+        
+        // Apply changes to state
+        let mut state_manager = state.state_manager().clone();
+        state_manager.apply_changes(bundle);
+        state.replace_state_manager(state_manager);
+    } else {
+        println!("Transaction failed: {:?}", result.error);
+    }
+    
+    Ok(())
+}
+```
+
+## ExecutionResult
+
+The `execute_transaction()` function returns an `ExecutionResult`:
+
+```rust
+pub struct ExecutionResult {
+    pub success: bool,
+    pub gas_used: U256,
+    pub gas_refund: U256,
+    pub output: Bytes,
+    pub logs: Vec<String>,
+    pub error: Option<String>,
+}
+```
+
+### Checking Results
+
+```rust
+let result = execute_transaction(tx, sender, &mut bundle, state, block_timestamp)?;
+
+if result.success {
+    println!("✅ Success");
+    println!("Gas used: {}", result.gas_used);
+    
+    for log in &result.logs {
+        println!("Log: {}", log);
+    }
+    
+    if !result.output.is_empty() {
+        println!("Output: {}", hex::encode(&result.output));
+    }
+} else {
+    eprintln!("❌ Failed: {}", result.error.unwrap_or_default());
+    
+    for log in &result.logs {
+        eprintln!("  {}", log);
+    }
+}
+```
+
+## ProcessingContext
+
+The `execute_transaction()` function requires a type implementing `ProcessingContext`:
+
+```rust
+pub trait ProcessingContext {
+    fn state_manager(&self) -> &StateManager;
+    fn state_manager_mut(&mut self) -> &mut StateManager;
+    fn bitcoin_client_read(&self) -> Option<Arc<dyn BitcoinRpcReadClient>>;
+    fn bitcoin_network(&self) -> bitcoin::Network;
+    fn handle_cmio_query(
+        &mut self,
+        message: CmioMessage,
+        current_intent_id: Option<B256>,
+    ) -> Option<CmioMessage>;
+}
+```
+
+### Using CoreLaneStateForLib
+
+The library provides `CoreLaneStateForLib` which implements `ProcessingContext`:
+
+```rust
+use core_lane::{
+    CoreLaneStateForLib, StateManager,
+    create_bitcoin_rpc_client
+};
+use bitcoin::Network;
+use std::sync::Arc;
+
+// Create Bitcoin RPC client
+let rpc_client = create_bitcoin_rpc_client(
+    "http://127.0.0.1:18443",
+    "user",
+    "password"
+)?;
+
+// Create processing context
+let state = StateManager::new();
+let mut context = CoreLaneStateForLib::new(
+    state,
+    rpc_client.clone(),
+    rpc_client,
+    Network::Regtest
+);
+
+// Now you can execute transactions
+let mut bundle = BundleStateManager::new();
+let result = execute_transaction(
+    &tx_envelope,
+    sender_address,
+    &mut bundle,
+    &mut context,
+    block_timestamp
+)?;
+```
+
+## Complete Example
+
+Here's a complete example from `examples/simple_sequencer.rs`:
+
+```rust
+use alloy_consensus::{SignableTransaction, TxEip1559};
+use alloy_primitives::{Bytes, TxKind};
+use alloy_signer::SignerSync;
+use alloy_signer_local::PrivateKeySigner;
+use core_lane::{
+    create_bitcoin_rpc_client, execute_transaction,
+    Address, BundleStateManager, CoreLaneStateForLib,
+    StateManager, TxEnvelope, U256,
+};
+use bitcoin::Network;
+use anyhow::Result;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Setup Bitcoin RPC client
+    let bitcoin_client = create_bitcoin_rpc_client(
+        "http://127.0.0.1:18443",
+        "user",
+        "password"
+    )?;
+    
+    // Initialize state and context
+    let mut state = StateManager::new();
+    let mut state_context = CoreLaneStateForLib::new(
+        state.clone(),
+        bitcoin_client.clone(),
+        bitcoin_client,
+        Network::Regtest
+    );
+    
+    // Create a signer
+    let signer: PrivateKeySigner =
+        "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+            .parse()?;
+    let sender = signer.address();
+    let recipient = Address::from([0x99; 20]);
+    
+    // Give sender initial balance
+    let mut setup_bundle = BundleStateManager::new();
+    let initial_balance = U256::from(10_000_000_000_000_000_000u128);
+    setup_bundle.add_balance(&state, sender, initial_balance)?;
+    state.apply_changes(setup_bundle);
+    state_context.replace_state_manager(state.clone());
+    
+    // Build transaction
+    let tx = TxEip1559 {
+        chain_id: 1,
+        nonce: 0,
+        max_priority_fee_per_gas: 1_000_000_000,
+        max_fee_per_gas: 20_000_000_000,
+        gas_limit: 21000,
+        to: TxKind::Call(recipient),
+        value: U256::from(1_000_000_000_000_000_000u128), // 1 ETH
+        input: Bytes::new(),
+        access_list: Default::default(),
+    };
+    
+    // Sign transaction
+    let signature = signer.sign_hash_sync(&tx.signature_hash())?;
+    let signed = tx.into_signed(signature);
+    let envelope = TxEnvelope::Eip1559(signed);
+    
+    // Execute transaction
+    let mut tx_bundle = BundleStateManager::new();
+    let block_timestamp = 1704067200;
+    
+    let result = execute_transaction(
+        &envelope,
+        sender,
+        &mut tx_bundle,
+        &mut state_context,
+        block_timestamp
+    )?;
+    
+    if result.success {
+        println!("✅ Transaction executed successfully!");
+        println!("Gas used: {}", result.gas_used);
+        
+        // Apply changes
+        state.apply_changes(tx_bundle);
+        
+        println!("Sender balance: {}", state.get_balance(sender));
+        println!("Recipient balance: {}", state.get_balance(recipient));
+    } else {
+        println!("❌ Transaction failed: {:?}", result.error);
+    }
+    
+    Ok(())
+}
+```
+
+## Transaction Helpers
+
+The library provides helper functions for extracting transaction data:
+
+```rust
+use core_lane::{get_transaction_input_bytes, get_transaction_nonce};
+
+// Get transaction calldata
+let input_bytes = get_transaction_input_bytes(&tx_envelope);
+println!("Input: {}", hex::encode(&input_bytes));
+
+// Get transaction nonce
+let nonce = get_transaction_nonce(&tx_envelope);
+println!("Nonce: {}", nonce);
+```
+
+## Special Addresses
+
+Core Lane defines special addresses for system operations:
+
+```rust
+use core_lane::CoreLaneAddresses;
+
+// Exit marketplace (intent operations)
+let exit_marketplace = CoreLaneAddresses::exit_marketplace();
+// 0x0000000000000000000000000000000000000045
+
+// Cartesi HTTP runner
+let cartesi_runner = CoreLaneAddresses::cartesi_http_runner();
+// 0x0000000000000000000000000000000000000042
+
+// Burn address
+let burn = CoreLaneAddresses::burn();
+// 0x0000000000000000000000000000000000000666
+```
+
+Transactions sent to these addresses trigger special behavior:
+
+- **Exit Marketplace**: Intent creation, locking, solving, and cancellation
+- **Cartesi HTTP Runner**: RISC-V program execution (requires `cartesi-runner` feature)
+- **Burn Address**: Reserved for future use
+
+## Nonce Validation
+
+Transactions are validated for correct nonce sequencing:
+
+```rust
+// Transaction with wrong nonce will fail
+let result = execute_transaction(tx, sender, &mut bundle, state, block_timestamp)?;
+
+if !result.success {
+    // Check for nonce error
+    if let Some(error) = &result.error {
+        if error.contains("Invalid nonce") {
+            println!("Nonce mismatch detected");
+        }
+    }
+}
+```
+
+The nonce must match the account's current nonce exactly. After successful execution, the nonce is incremented automatically.
+
+## See Also
+
+- [State Manager](/library/state-manager) - Managing state and bundles
+- [Getting Started](/library/getting-started) - Library setup and basic usage
+- [Bitcoin Client](/library/bitcoin-client) - Bitcoin RPC integration

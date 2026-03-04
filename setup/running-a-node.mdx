@@ -1,0 +1,546 @@
+---
+title: 'Running a Node'
+description: 'Start and operate a Core Lane node with various commands and modes'
+---
+
+## Starting the Node
+
+The primary command to run a Core Lane node is `start`. This launches the JSON-RPC server and begins scanning Bitcoin blocks for Core Lane transactions.
+
+### Basic Start Command
+
+```bash
+core-lane-node start \
+  --bitcoin-rpc-read-url http://127.0.0.1:18443 \
+  --bitcoin-rpc-read-user bitcoin \
+  --bitcoin-rpc-read-password yourpassword \
+  --mnemonic-file .mnemonic
+```
+
+### Start Command Options
+
+<ParamField path="--bitcoin-rpc-read-url" type="string" default="http://127.0.0.1:18443">
+  Bitcoin RPC URL for reading blockchain data
+</ParamField>
+
+<ParamField path="--bitcoin-rpc-read-user" type="string" default="user">
+  Bitcoin RPC username for read operations
+</ParamField>
+
+<ParamField path="--bitcoin-rpc-read-password" type="string" required>
+  Bitcoin RPC password for read operations
+</ParamField>
+
+<ParamField path="--bitcoin-rpc-write-url" type="string">
+  Optional separate RPC URL for write/wallet operations (defaults to read URL)
+</ParamField>
+
+<ParamField path="--bitcoin-rpc-write-user" type="string">
+  Bitcoin RPC username for write operations (defaults to read user)
+</ParamField>
+
+<ParamField path="--bitcoin-rpc-write-password" type="string">
+  Bitcoin RPC password for write operations (defaults to read password)
+</ParamField>
+
+<ParamField path="--start-block" type="integer">
+  Bitcoin block height to start scanning from. Only applied on fresh start; ignored when resuming from saved state.
+</ParamField>
+
+<ParamField path="--http-host" type="string" default="127.0.0.1">
+  HTTP server bind address. Use `0.0.0.0` to accept connections from any interface.
+</ParamField>
+
+<ParamField path="--http-port" type="integer" default="8545">
+  HTTP server port for JSON-RPC API
+</ParamField>
+
+<ParamField path="--mnemonic" type="string">
+  BIP-39 mnemonic phrase (not recommended - visible in process list)
+</ParamField>
+
+<ParamField path="--mnemonic-file" type="string">
+  Path to file containing mnemonic phrase (recommended)
+</ParamField>
+
+<ParamField path="--electrum-url" type="string">
+  Electrum server URL for non-regtest networks (e.g., `ssl://electrum.blockstream.info:50002`)
+</ParamField>
+
+<ParamField path="--sequencer-rpc-url" type="string">
+  Sequencer RPC URL for forwarding `eth_sendRawTransaction` calls
+</ParamField>
+
+<ParamField path="--sequencer-address" type="address">
+  Ethereum address receiving priority fees. Defaults to Anvil test address if not specified.
+</ParamField>
+
+<ParamField path="--on-demand-polling" type="boolean" default="false">
+  Enable on-demand polling mode. Block scanning only occurs when triggered via `POST /do_poll`.
+</ParamField>
+
+## Operating Modes
+
+<Tabs>
+  <Tab title="Standard Mode">
+    ### Standard Bitcoin Anchor Mode
+
+    Default mode where Core Lane reads taproot DA from Bitcoin blocks:
+
+    ```bash
+    core-lane-node start \
+      --bitcoin-rpc-read-url http://127.0.0.1:18443 \
+      --bitcoin-rpc-read-user bitcoin \
+      --bitcoin-rpc-read-password bitcoin123 \
+      --mnemonic-file .mnemonic \
+      --start-block 100
+    ```
+
+    **Behavior**:
+    - Scans Bitcoin blocks every 10 seconds
+    - Processes taproot transactions with Core Lane bundles
+    - Builds Core Lane blocks from Bitcoin anchors
+    - Serves JSON-RPC on configured port
+  </Tab>
+
+  <Tab title="On-Demand Polling">
+    ### On-Demand Polling Mode
+
+    Disable automatic scanning, trigger via HTTP:
+
+    ```bash
+    core-lane-node start \
+      --bitcoin-rpc-read-url http://127.0.0.1:18443 \
+      --bitcoin-rpc-read-user bitcoin \
+      --bitcoin-rpc-read-password bitcoin123 \
+      --mnemonic-file .mnemonic \
+      --on-demand-polling
+    ```
+
+    **Trigger block scan**:
+    ```bash
+    curl -X POST http://127.0.0.1:8545/do_poll
+    ```
+
+    **Use cases**:
+    - Testing environments
+    - Manual control over block processing
+    - Resource-constrained environments
+  </Tab>
+
+  <Tab title="Derived Mode">
+    ### Derived Chain Mode
+
+    Read bundles from another Core Lane instance:
+
+    ```bash
+    core-lane-node derived-start \
+      --core-rpc-url http://127.0.0.1:8545 \
+      --chain-id 1281453634 \
+      --derived-da-address 0xYourDAAddress \
+      --http-port 8546 \
+      --start-block 0
+    ```
+
+    **Parameters**:
+    - `--core-rpc-url`: Upstream Core Lane JSON-RPC endpoint
+    - `--chain-id`: Chain ID for this derived instance
+    - `--derived-da-address`: Address to read DA from
+    - `--start-block`: Core Lane block to start from (optional)
+  </Tab>
+
+  <Tab title="Espresso Mode">
+    ### Espresso Derived Mode
+
+    Read bundles from Espresso DA:
+
+    ```bash
+    core-lane-node derived-espresso-start \
+      --espresso-base-url https://query.decaf.testnet.espresso.network/v1 \
+      --espresso-namespace 1281453637 \
+      --chain-id 1281453634 \
+      --core-lane-rpc-url http://127.0.0.1:8545 \
+      --http-port 8546
+    ```
+
+    **Parameters**:
+    - `--espresso-base-url`: Espresso query service URL
+    - `--espresso-namespace`: Namespace ID (default: `1281453637` = "LanE")
+    - `--chain-id`: Chain ID for this instance
+    - `--core-lane-rpc-url`: Upstream Core Lane RPC for reorg handling
+    - `--start-block`: Core Lane block number to start from
+    - `--start-anchor`: Espresso anchor height to start from
+  </Tab>
+</Tabs>
+
+## Wallet Management Commands
+
+### Create Wallet
+
+Generate a new BIP-39 mnemonic and wallet database:
+
+```bash
+core-lane-node create-wallet --network regtest
+```
+
+**Options**:
+<ParamField path="--network" type="string" default="regtest">
+  Network: `bitcoin`, `mainnet`, `testnet`, `testnet4`, `signet`, or `regtest`
+</ParamField>
+
+<ParamField path="--mnemonic" type="string">
+  Restore from existing mnemonic instead of generating new one
+</ParamField>
+
+<ParamField path="--mnemonic-only" type="boolean" default="false">
+  Only generate and output mnemonic without creating database file
+</ParamField>
+
+<ParamField path="--electrum-url" type="string">
+  Perform initial blockchain sync with Electrum server (for non-regtest networks)
+</ParamField>
+
+**Example: Restore from mnemonic**:
+```bash
+core-lane-node create-wallet \
+  --network mainnet \
+  --mnemonic "your twelve word recovery phrase here" \
+  --electrum-url ssl://electrum.blockstream.info:50002
+```
+
+### Get Wallet Address
+
+Retrieve a receive address from your wallet:
+
+```bash
+core-lane-node get-address \
+  --network regtest \
+  --mnemonic-file .mnemonic
+```
+
+### Check Bitcoin Balance
+
+Query wallet balance:
+
+```bash
+core-lane-node get-bitcoin-balance \
+  --network regtest \
+  --mnemonic-file .mnemonic \
+  --rpc-url http://127.0.0.1:18443 \
+  --rpc-user bitcoin \
+  --rpc-password bitcoin123
+```
+
+For mainnet/testnet, use Electrum:
+```bash
+core-lane-node get-bitcoin-balance \
+  --network mainnet \
+  --mnemonic-file .mnemonic \
+  --electrum-url ssl://electrum.blockstream.info:50002
+```
+
+## Transaction Commands
+
+### Burn BTC to Core Lane
+
+Create a burn transaction to mint tokens on Core Lane:
+
+```bash
+core-lane-node burn \
+  --burn-amount 1000000 \
+  --chain-id 1281453634 \
+  --eth-address 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 \
+  --network regtest \
+  --mnemonic-file .mnemonic \
+  --rpc-password bitcoin123
+```
+
+**Parameters**:
+<ParamField path="--burn-amount" type="integer" required>
+  Amount to burn in satoshis (1 BTC = 100,000,000 sats)
+</ParamField>
+
+<ParamField path="--chain-id" type="integer" required>
+  Target Core Lane chain ID
+</ParamField>
+
+<ParamField path="--eth-address" type="address" required>
+  Recipient Ethereum address on Core Lane
+</ParamField>
+
+<ParamField path="--network" type="string" default="regtest">
+  Bitcoin network
+</ParamField>
+
+### Send Transaction
+
+Broadcast a raw Bitcoin transaction:
+
+```bash
+core-lane-node send-transaction \
+  --raw-tx-hex 0201000000... \
+  --network regtest \
+  --mnemonic-file .mnemonic \
+  --rpc-password bitcoin123
+```
+
+### Send Bundle
+
+Send a bundle of transactions with optional sequencer payment:
+
+```bash
+core-lane-node send-bundle \
+  --raw-tx-hex 0201000000... \
+  --raw-tx-hex 0201000001... \
+  --network regtest \
+  --mnemonic-file .mnemonic \
+  --sequencer-payment-recipient 0xSequencerAddress \
+  --marker head
+```
+
+**Parameters**:
+<ParamField path="--raw-tx-hex" type="string" repeated>
+  Raw transaction hex strings (specify multiple times for bundle)
+</ParamField>
+
+<ParamField path="--sequencer-payment-recipient" type="address">
+  Recipient for sequencer payment
+</ParamField>
+
+<ParamField path="--marker" type="string" default="standard">
+  Bundle marker: `head` (priority) or `standard`
+</ParamField>
+
+## Bitcoin Cache Server
+
+Run a caching Bitcoin RPC proxy for improved performance:
+
+```bash
+core-lane-node bitcoin-cache \
+  --host 127.0.0.1 \
+  --port 8332 \
+  --cache-dir ./bitcoin-cache \
+  --bitcoin-rpc-url http://127.0.0.1:8332 \
+  --bitcoin-rpc-user bitcoin \
+  --bitcoin-rpc-password bitcoin123 \
+  --block-archive http://144.76.56.210/blocks
+```
+
+**Parameters**:
+<ParamField path="--host" type="string" default="127.0.0.1">
+  Cache server bind address
+</ParamField>
+
+<ParamField path="--port" type="integer" default="8332">
+  Cache server port
+</ParamField>
+
+<ParamField path="--cache-dir" type="string" default="./bitcoin-cache">
+  Directory for cached blocks
+</ParamField>
+
+<ParamField path="--bitcoin-rpc-url" type="string" required>
+  Upstream Bitcoin RPC URL
+</ParamField>
+
+<ParamField path="--no-rpc-auth" type="boolean" default="false">
+  Disable RPC authentication requirement
+</ParamField>
+
+<ParamField path="--block-archive" type="string" default="http://144.76.56.210/blocks">
+  HTTP block archive for historical data
+</ParamField>
+
+<ParamField path="--starting-block-count" type="integer">
+  Initial block count for cache warmup
+</ParamField>
+
+<ParamField path="--disable-archive-fetch" type="boolean" default="false">
+  Disable fetching from block archive
+</ParamField>
+
+<ParamField path="--s3-bucket" type="string">
+  S3 bucket name for block storage
+</ParamField>
+
+<ParamField path="--s3-region" type="string" default="us-east-1">
+  S3 region
+</ParamField>
+
+<ParamField path="--s3-endpoint" type="string">
+  Custom S3 endpoint URL
+</ParamField>
+
+## Monitoring and Logs
+
+### Log Levels
+
+Control logging verbosity with `RUST_LOG`:
+
+```bash
+# Info level (default)
+RUST_LOG=info core-lane-node start ...
+
+# Debug level (verbose)
+RUST_LOG=debug core-lane-node start ...
+
+# Specific module debugging
+RUST_LOG=core_lane::state=debug,info core-lane-node start ...
+```
+
+### Health Check Endpoint
+
+When running via Docker with Fly.io configuration, health checks are available:
+
+```bash
+curl http://localhost:8545/health
+```
+
+### Metrics
+
+Core Lane tracks operational metrics:
+- **Reorgs detected**: Count of blockchain reorganizations
+- **Total sequencer payments**: Cumulative priority fees (in wei)
+- **Last block processing time**: Duration of last block processing (ms)
+- **Total burned amount**: Base fees burned via EIP-1559 (in wei)
+
+Access via state queries or implement custom monitoring endpoints.
+
+## State Management
+
+### State Persistence
+
+Core Lane automatically persists state to disk:
+- **Full state snapshots**: Saved after each block
+- **Delta files**: Incremental changes per block
+- **Metastate**: EIP-1559 fee manager and totals
+- **Chain index**: Bitcoin height to Core Lane block mapping
+- **Tip marker**: Current chain tip for crash recovery
+
+### State Recovery
+
+On restart, Core Lane:
+1. Reads the `tip` file to determine last committed block
+2. Loads full chain from `chain_index/` (blocks 1..N)
+3. Falls back to tip-only restore if index is incomplete
+4. Resumes scanning from last processed Bitcoin height
+
+### Manual State Reset
+
+To reset state and rescan from genesis:
+
+```bash
+rm -rf blocks/ metastate/ deltas/ chain_index/ tip
+core-lane-node start --start-block 0 ...
+```
+
+## Production Deployment
+
+### Using Docker Compose
+
+```yaml
+version: '3.8'
+services:
+  core-lane:
+    image: ghcr.io/lanelayer/core-lane/core-lane:latest
+    ports:
+      - "8545:8545"
+    volumes:
+      - core-lane-data:/data
+      - ./mnemonic:/mnemonic:ro
+    environment:
+      - HTTP_HOST=0.0.0.0
+      - HTTP_PORT=8545
+      - NETWORK=mainnet
+      - ELECTRUM_URL=ssl://electrum.blockstream.info:50002
+    command: |
+      start 
+      --mnemonic-file /mnemonic 
+      --http-host 0.0.0.0 
+      --http-port 8545
+
+volumes:
+  core-lane-data:
+```
+
+### Fly.io Deployment
+
+Core Lane includes `fly.toml` configuration:
+
+```bash
+# Deploy to Fly.io
+fly deploy
+
+# Set secrets
+fly secrets set CORE_LANE_MNEMONIC="your mnemonic here"
+
+# Monitor logs
+fly logs
+
+# Check status
+fly status
+```
+
+## Troubleshooting
+
+### Node Won't Start
+
+**Check Bitcoin RPC connectivity**:
+```bash
+curl --user bitcoin:bitcoin123 \
+  --data-binary '{"jsonrpc":"1.0","id":"test","method":"getblockchaininfo","params":[]}' \
+  http://127.0.0.1:18443
+```
+
+**Verify mnemonic file**:
+```bash
+ls -l .mnemonic
+cat .mnemonic  # Should show 12 or 24 words
+```
+
+### State Corruption
+
+If you see "Failed to deserialize state" errors:
+
+```bash
+# Nuclear option: wipe all state
+rm -rf blocks/ metastate/ deltas/ chain_index/ tip wallet_*.sqlite3
+core-lane-node create-wallet --network regtest
+core-lane-node start --start-block 0 ...
+```
+
+### Port Already in Use
+
+```bash
+# Find process using port 8545
+lsof -i :8545
+
+# Use different port
+core-lane-node start --http-port 8546 ...
+```
+
+### Wallet Balance Not Updating
+
+For regtest, ensure BDK wallet sync:
+```bash
+# Check balance explicitly
+core-lane-node get-bitcoin-balance \
+  --network regtest \
+  --mnemonic-file .mnemonic \
+  --rpc-url http://127.0.0.1:18443 \
+  --rpc-user bitcoin \
+  --rpc-password bitcoin123
+```
+
+For mainnet/testnet, sync with Electrum happens automatically on startup.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="JSON-RPC API" icon="code" href="/api/overview">
+    Interact with your node via JSON-RPC
+  </Card>
+  <Card title="Development Environment" icon="flask" href="/setup/development-environment">
+    Set up automated testing environment
+  </Card>
+</CardGroup>

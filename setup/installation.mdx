@@ -1,0 +1,224 @@
+---
+title: 'Installation'
+description: 'Install and build Core Lane from source'
+---
+
+## System Requirements
+
+Before installing Core Lane, ensure your system meets the following requirements:
+
+- **Rust**: Version 1.90 or later
+- **Operating System**: Linux (Debian Trixie, Ubuntu, or compatible), macOS, or Windows with WSL
+- **Docker**: Required for Bitcoin regtest development environment
+- **System Libraries**:
+  - `pkg-config`
+  - `libssl-dev` (OpenSSL 3.x)
+  - `libudev-dev`
+  - `build-essential`
+  - `ca-certificates`
+  - `libclang-dev`
+
+## Installation Methods
+
+<Tabs>
+  <Tab title="From Source (Recommended)">
+    ### Clone the Repository
+
+    ```bash
+    git clone https://github.com/lanelayer/core-lane.git
+    cd core-lane
+    ```
+
+    ### Install System Dependencies
+
+    <CodeGroup>
+    ```bash Debian/Ubuntu
+    sudo apt-get update
+    sudo apt-get install -y \
+      pkg-config \
+      libssl-dev \
+      libudev-dev \
+      build-essential \
+      ca-certificates \
+      libclang-dev
+    ```
+
+    ```bash macOS
+    brew install openssl pkg-config
+    ```
+    </CodeGroup>
+
+    ### Build Core Lane
+
+    Build the debug version for development:
+
+    ```bash
+    cargo build
+    ```
+
+    Or build the optimized release version:
+
+    ```bash
+    cargo build --release
+    ```
+
+    The binary will be located at:
+    - Debug: `target/debug/core-lane-node`
+    - Release: `target/release/core-lane-node`
+
+    ### Verify Installation
+
+    ```bash
+    ./target/debug/core-lane-node --help
+    ```
+
+    You should see the Core Lane command-line interface help output.
+  </Tab>
+
+  <Tab title="Docker">
+    ### Using Pre-built Docker Image
+
+    Pull the official Core Lane Docker image:
+
+    ```bash
+    docker pull ghcr.io/lanelayer/core-lane/core-lane:latest
+    ```
+
+    ### Build Docker Image Locally
+
+    From the Core Lane repository:
+
+    ```bash
+    docker build -t core-lane .
+    ```
+
+    The Dockerfile uses a multi-stage build:
+    1. **Builder stage**: Rust 1.90 with all dependencies
+    2. **Runtime stage**: Debian Trixie Slim with only runtime dependencies
+
+    ### Run with Docker
+
+    ```bash
+    docker run -p 8545:8545 \
+      -v $(pwd)/data:/data \
+      ghcr.io/lanelayer/core-lane/core-lane:latest
+    ```
+  </Tab>
+
+  <Tab title="Makefile Commands">
+    ### Using Make
+
+    Core Lane includes a Makefile for common tasks:
+
+    ```bash
+    # Build the node
+    make build
+
+    # Clean build artifacts
+    make clean
+
+    # Run tests
+    make test
+
+    # Run only unit tests
+    make test-unit
+
+    # Run only integration tests
+    make test-integration
+
+    # Format code
+    make fmt
+
+    # Run linter
+    make clippy
+    ```
+
+    View all available commands:
+
+    ```bash
+    make help
+    ```
+  </Tab>
+</Tabs>
+
+## Feature Flags
+
+Core Lane supports optional features that can be enabled during compilation:
+
+<ParamField path="cartesi-runner" type="boolean" default="true">
+  Enables Cartesi Machine runtime for executing programs. This is the default feature.
+</ParamField>
+
+### Building Without Cartesi
+
+To build without the Cartesi Machine dependency:
+
+```bash
+cargo build --no-default-features
+```
+
+## Dependencies
+
+Core Lane is built with the following major dependencies:
+
+- **Bitcoin**: `bitcoin 0.32.0` - Bitcoin protocol library
+- **Alloy**: Ethereum types and utilities (v1.x)
+- **BDK**: Bitcoin Development Kit for wallet management
+- **Tokio**: Asynchronous runtime
+- **Axum**: Web framework for JSON-RPC server
+- **Cartesi Machine**: RISC-V runtime (optional)
+
+See `Cargo.toml` for the complete dependency list.
+
+## Troubleshooting
+
+### OpenSSL Issues
+
+If you encounter OpenSSL-related errors:
+
+```bash
+# Debian/Ubuntu
+sudo apt-get install libssl-dev
+
+# macOS
+export OPENSSL_DIR=$(brew --prefix openssl@3)
+cargo build
+```
+
+### libudev Issues
+
+On Linux, ensure libudev is installed:
+
+```bash
+sudo apt-get install libudev-dev
+```
+
+### Cartesi Machine Build Errors
+
+The Cartesi Machine bindings will automatically download required files. Ensure you have:
+- A stable internet connection
+- Sufficient disk space (~500MB)
+- Write permissions in the build directory
+
+### Verification
+
+After installation, verify the binary works:
+
+```bash
+# Check version info
+./target/debug/core-lane-node --help
+
+# Create a test wallet to verify BDK integration
+./target/debug/core-lane-node create-wallet --network regtest
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="gear" href="/setup/configuration">
+    Configure your Core Lane node with environment variables and CLI flags
+  </Card>
+  <Card title="Development Environment" icon="code" href="/setup/development-environment">
+    Set up a local development environment with Bitcoin regtest
+  </Card>
+</CardGroup>

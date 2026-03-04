@@ -1,0 +1,440 @@
+---
+title: RISC-V Program Intent
+description: Programmable intent validation using RISC-V programs in Cartesi machines
+---
+
+## Overview
+
+The `RiscVProgram` intent type (type ID: 2) enables programmable intent validation by executing RISC-V programs within Cartesi virtual machines. These programs can enforce custom business logic for intent lifecycle operations including locking, solving, and cancellation.
+
+## Data Structure
+
+The `RiscVProgramIntent` struct references a stored blob containing the RISC-V program:
+
+```rust
+pub struct RiscVProgramIntent {
+    pub blob_hash: [u8; 32],   // Hash of stored blob containing program
+    pub extra_data: Vec<u8>,   // Additional data passed to program
+}
+```
+
+### Field Descriptions
+
+- **blob_hash**: Keccak256 hash of the blob containing the RISC-V program binary
+- **extra_data**: Arbitrary data accessible by the program via CMIO queries (can be used for parameters, configuration, etc.)
+
+## Creating a RISC-V Program Intent
+
+### Step 1: Store the Program Blob
+
+First, store your compiled RISC-V program as a blob:
+
+```solidity
+// Your compiled RISC-V program binary
+bytes memory programBinary = hex"...";
+
+// Store the blob (pay storage fee, set expiry)
+uint256 expiryTime = block.timestamp + 30 days;
+intentSystem.storeBlob{value: storageFee}(programBinary, expiryTime);
+
+// Calculate the blob hash
+bytes32 blobHash = keccak256(programBinary);
+```
+
+### Step 2: Create the Intent
+
+```rust
+use core_lane::intents::{RiscVProgramIntent, IntentData, IntentType};
+use ciborium::into_writer;
+
+// Create the RISC-V program intent
+let riscv_intent = RiscVProgramIntent {
+    blob_hash: blob_hash_bytes,  // 32-byte blob hash
+    extra_data: vec![/* custom data */],
+};
+
+// Serialize to CBOR
+let mut riscv_cbor = Vec::new();
+into_writer(&riscv_intent, &mut riscv_cbor)?;
+
+// Wrap in IntentData
+let intent_data = IntentData {
+    intent_type: IntentType::RiscVProgram,
+    data: riscv_cbor,
+};
+
+let cbor_bytes = intent_data.to_cbor()?;
+```
+
+### Step 3: Submit via intentFromBlob
+
+```solidity
+// Submit intent referencing the blob
+bytes memory extraData = hex"...";  // CBOR-encoded RiscVProgramIntent
+
+bytes32 intentId = intentSystem.intentFromBlob{value: 1 ether}(
+    blobHash,
+    nonce,
+    extraData  // Contains serialized RiscVProgramIntent
+);
+```
+
+<Note>
+The `extra_data` field in the transaction is the CBOR-serialized `RiscVProgramIntent` struct, which itself contains an `extra_data` field accessible to the program.
+</Note>
+
+## Program Execution Context
+
+RISC-V programs execute in a Cartesi machine when certain operations are performed on the intent:
+
+- **LockIntentForSolving**: Program executes to approve/deny lock
+- **SolveIntent**: Program executes to approve/deny solution
+- **CancelIntent**: Program executes to approve/deny cancellation
+- **CancelIntentLock**: Program executes to approve/deny lock cancellation
+
+## CMIO Communication
+
+Programs communicate with Core Lane via CMIO (Cartesi Machine IO) using JSON messages. The communication protocol is defined in `src/cmio.rs`.
+
+### Available CMIO Queries
+
+```rust
+pub enum CmioMessage {
+    // Query the current command type being executed
+    QueryCommandType {},
+    CommandTypeResponse {
+        command_type: IntentCommandType,
+        success: bool,
+    },
+
+    // Read intent data by ID
+    ReadIntentData {
+        intent_id: String,
+    },
+    IntentDataResponse {
+        data_hex: String,
+        success: bool,
+    },
+
+    // Read blob information
+    ReadBlobInfo {
+        blob_hash_hex: String,
+    },
+    BlobInfoResponse {
+        length: u64,
+        success: bool,
+    },
+
+    // Read blob contents
+    ReadBlob {
+        blob_hash_hex: String,
+    },
+    BlobResponse {
+        data_hex: String,
+        success: bool,
+    },
+
+    // Read extra data from current intent
+    ReadExtraData {},
+    ExtraDataResponse {
+        extra_data: Vec<u8>,
+    },
+
+    // Log message (debugging)
+    Log {
+        message: String,
+    },
+
+    // Exit with status code
+    Exit {
+        code: u32,
+    },
+}
+```
+
+### Message Serialization
+
+CMIO messages are serialized as JSON:
+
+```rust
+let message = CmioMessage::QueryCommandType {};
+let json_bytes = message.to_bytes()?;  // Serializes to JSON
+
+// Parse response
+let response = CmioMessage::from_bytes(&response_bytes)?;
+```
+
+## Permission System
+
+Programs return an exit code to indicate permission:
+
+- **Exit code 0**: Operation ALLOWED
+- **Exit code 1**: Operation DENIED
+- **Other codes**: Treated as errors
+
+```c
+// Example RISC-V program logic
+if (should_allow_operation) {
+    exit(0);  // Allow
+} else {
+    exit(1);  // Deny
+}
+```
+
+## Query Handler Implementation
+
+The CMIO query handler provides access to state:
+
+```rust
+// From src/cmio.rs:69-168
+pub fn handle_cmio_query(
+    message: CmioMessage,
+    state_manager: &StateManager,
+    current_intent_id: Option<B256>,
+) -> Option<CmioMessage> {
+    match message {
+        CmioMessage::QueryCommandType {} => {
+            state_manager
+                .get_intent(&current_intent_id?)
+                .map(|intent| CmioMessage::CommandTypeResponse {
+                    command_type: intent.last_command,
+                    success: true,
+                })
+        }
+        CmioMessage::ReadExtraData {} => {
+            // Returns the extra_data field from RiscVProgramIntent
+            let intent = state_manager.get_intent(&current_intent_id?)?;
+            let intent_data = IntentData::from_cbor(&intent.data).ok()?;
+            
+            if intent_data.intent_type == IntentType::RiscVProgram {
+                let riscv_intent = intent_data.parse_riscv_program().ok()?;
+                Some(CmioMessage::ExtraDataResponse {
+                    extra_data: riscv_intent.extra_data,
+                })
+            } else {
+                Some(CmioMessage::ExtraDataResponse { extra_data: vec![] })
+            }
+        }
+        // ... other message types
+    }
+}
+```
+
+## Execution Flow
+
+When an operation is performed on a RISC-V program intent:
+
+```rust
+// From transaction.rs:709-733 (lockIntentForSolving example)
+if intent_data.intent_type == IntentType::RiscVProgram {
+    let permission = check_riscv_intent_permission(
+        bundle_state,
+        state,
+        intent_data,
+        intent_id,
+    )?;
+    
+    if permission == 1 {
+        // Program denied the operation
+        return Ok(ExecutionResult {
+            success: false,
+            logs: vec!["Permission denied".to_string()],
+            error: Some("Permission denied".to_string()),
+        });
+    }
+}
+
+// Permission granted (exit code 0), continue with operation
+```
+
+## Example: Access Control Program
+
+```c
+// Simple whitelist program
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+// Whitelist of allowed solvers
+const char* allowed_solvers[] = {
+    "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb",
+    "0x1234567890abcdef1234567890abcdef12345678",
+};
+
+int main() {
+    // Query the current command type
+    char* cmd_response = query_cmio("{\"QueryCommandType\":{}}");
+    
+    // Parse command type
+    int command_type = parse_command_type(cmd_response);
+    
+    if (command_type == 3) {  // LockIntentForSolving
+        // Check if solver is whitelisted
+        char* solver = get_current_sender();
+        
+        for (int i = 0; i < sizeof(allowed_solvers) / sizeof(char*); i++) {
+            if (strcmp(solver, allowed_solvers[i]) == 0) {
+                exit(0);  // Allow
+            }
+        }
+        
+        exit(1);  // Deny - not whitelisted
+    }
+    
+    // Allow all other operations
+    exit(0);
+}
+```
+
+## Parsing Intent Data
+
+```rust
+use core_lane::intents::IntentData;
+
+// Deserialize IntentData from CBOR
+let intent_data = IntentData::from_cbor(&cbor_bytes)?;
+
+// Parse RISC-V program intent
+let riscv_intent = intent_data.parse_riscv_program()?;
+
+println!("Blob hash: {}", hex::encode(riscv_intent.blob_hash));
+println!("Extra data: {} bytes", riscv_intent.extra_data.len());
+```
+
+## Operation Permission Checks
+
+### Lock Intent
+
+Program executes before locking:
+
+```rust
+// transaction.rs:697-734
+IntentStatus::Submitted => {
+    if intent_data.intent_type == IntentType::RiscVProgram {
+        let permission = check_riscv_intent_permission(/*...*/);
+        if permission == 1 {
+            return Err("Permission denied");
+        }
+    }
+    // Lock the intent
+    intent.status = IntentStatus::Locked(sender);
+}
+```
+
+### Solve Intent
+
+Program executes before solving:
+
+```rust
+// transaction.rs:955-977
+IntentType::RiscVProgram => {
+    let permission = check_riscv_intent_permission(/*...*/);
+    
+    if permission == 1 {
+        return Err("Permission denied");
+    }
+    
+    // Transfer value to solver
+    bundle_state.add_balance(sender, U256::from(intent_value));
+    intent.status = IntentStatus::Solved;
+}
+```
+
+### Cancel Intent
+
+Program executes before cancellation:
+
+```rust
+// transaction.rs:1043-1068
+if intent_data.intent_type == IntentType::RiscVProgram {
+    let permission = check_riscv_intent_permission(/*...*/);
+    
+    if permission == 1 {
+        return Err("Permission denied");
+    }
+}
+
+// Cancel and refund
+intent.status = IntentStatus::Cancelled;
+bundle_state.add_balance(creator, U256::from(value));
+```
+
+### Cancel Intent Lock
+
+Program executes before unlocking:
+
+```rust
+// transaction.rs:1117-1144
+if intent_data.intent_type == IntentType::RiscVProgram {
+    let permission = check_riscv_intent_permission(/*...*/);
+    
+    if permission == 1 {
+        return Err("Permission denied");
+    }
+}
+
+// Unlock the intent
+intent.status = IntentStatus::Submitted;
+```
+
+## Use Cases
+
+### Access Control
+- Whitelist/blacklist solvers
+- Multi-signature requirements
+- Time-based restrictions
+
+### Conditional Logic
+- Oracle-based conditions
+- State-dependent validation
+- Multi-step workflows
+
+### Custom Settlement
+- Complex payment distributions
+- Escrow conditions
+- Reputation systems
+
+## Error Handling
+
+Common errors with RISC-V program intents:
+
+| Error | Cause |
+|-------|-------|
+| "Expected RiscVProgram intent type" | Wrong intent type in IntentData |
+| "Blob not stored" | Referenced blob_hash not found |
+| "Permission denied" | Program returned exit code 1 |
+| "Permission denied by RISC-V program" | Program denied the operation |
+| "Cartesi support is disabled" | Node built without `--features cartesi-runner` |
+
+## Security Considerations
+
+1. **Program Verification**: Verify the RISC-V program binary before storing blobs
+2. **Gas Limits**: Programs must complete within Cartesi execution limits
+3. **State Access**: Programs can only query, not modify state directly
+4. **Determinism**: Programs must be deterministic for consensus
+5. **Blob Expiry**: Ensure blob expiry is set appropriately
+
+## Building RISC-V Programs
+
+Programs should be compiled for RISC-V architecture:
+
+```bash
+# Compile C program for RISC-V
+riscv64-unknown-linux-gnu-gcc \
+    -march=rv64gc \
+    -mabi=lp64d \
+    -static \
+    -o program.elf \
+    program.c
+
+# Extract binary
+riscv64-unknown-linux-gnu-objcopy \
+    -O binary \
+    program.elf \
+    program.bin
+```
+
+## Next Steps
+
+- [Intent System Overview](/api/intents/overview) - Core concepts and lifecycle
+- [AnchorBitcoinFill Intent](/api/intents/anchor-bitcoin-fill) - Bitcoin bridge intents

@@ -1,0 +1,393 @@
+---
+title: "State Management"
+description: "State management API for accounts, storage, and transactions"
+---
+
+## Overview
+
+Core Lane uses a two-tier state management system:
+- **StateManager**: Persistent state storage
+- **BundleStateManager**: Temporary state changes for transaction bundles
+
+This architecture allows for atomic bundle execution with rollback support.
+
+## StateManager
+
+Manages the persistent state of accounts, blobs, intents, and transactions.
+
+**Location:** `src/state.rs:86`
+
+### Structure
+
+```rust
+pub struct StateManager {
+    accounts: BTreeMap<Address, CoreLaneAccount>,
+    stored_blobs: BTreeMap<B256, Vec<u8>>,
+    kv_storage: BTreeMap<String, Vec<u8>>,
+    intents: BTreeMap<B256, Intent>,
+    transactions: Vec<StoredTransaction>,
+    transaction_receipts: BTreeMap<String, TransactionReceipt>,
+}
+```
+
+### Account Management
+
+<ParamField path="new" type="fn() -> Self">
+  Creates a new empty state manager.
+</ParamField>
+
+<ParamField path="get_account" type="fn(&self, address: Address) -> Option<&CoreLaneAccount>">
+  Retrieves an account by address.
+  
+  **Parameters:**
+  - `address`: Address to look up
+  
+  **Returns:** Reference to the account, or None if not found
+</ParamField>
+
+<ParamField path="set_account" type="fn(&mut self, address: Address, account: CoreLaneAccount)">
+  Sets or updates an account.
+  
+  **Parameters:**
+  - `address`: Address of the account
+  - `account`: Account data to store
+</ParamField>
+
+<ParamField path="get_balance" type="fn(&self, address: Address) -> U256">
+  Gets the balance of an account. Returns zero if account doesn't exist.
+  
+  **Parameters:**
+  - `address`: Address to query
+</ParamField>
+
+<ParamField path="get_nonce" type="fn(&self, address: Address) -> U256">
+  Gets the nonce of an account. Returns zero if account doesn't exist.
+  
+  **Parameters:**
+  - `address`: Address to query
+</ParamField>
+
+<ParamField path="accounts_count" type="fn(&self) -> usize">
+  Returns the total number of accounts in state.
+</ParamField>
+
+### Blob Storage
+
+<ParamField path="contains_blob" type="fn(&self, blob_hash: &B256) -> bool">
+  Checks if a blob is stored.
+  
+  **Parameters:**
+  - `blob_hash`: Hash of the blob to check
+</ParamField>
+
+<ParamField path="get_blob" type="fn(&self, blob_hash: &B256) -> Option<&Vec<u8>>">
+  Retrieves a stored blob.
+  
+  **Parameters:**
+  - `blob_hash`: Hash of the blob
+</ParamField>
+
+<ParamField path="insert_blob" type="fn(&mut self, blob_hash: B256, data: Vec<u8>)">
+  Stores a blob.
+  
+  **Parameters:**
+  - `blob_hash`: Hash of the blob
+  - `data`: Blob data
+</ParamField>
+
+### Key-Value Storage
+
+<ParamField path="get_kv" type="fn(&self, key: &str) -> Option<&Vec<u8>>">
+  Retrieves a value from key-value storage.
+</ParamField>
+
+<ParamField path="insert_kv" type="fn(&mut self, key: String, value: Vec<u8>)">
+  Inserts or updates a key-value pair.
+</ParamField>
+
+<ParamField path="remove_kv" type="fn(&mut self, key: &str) -> Option<Vec<u8>>">
+  Removes a key-value pair and returns the previous value.
+</ParamField>
+
+### Intent Management
+
+<ParamField path="get_intent" type="fn(&self, intent_id: &B256) -> Option<&Intent>">
+  Retrieves an intent by ID.
+</ParamField>
+
+<ParamField path="insert_intent" type="fn(&mut self, intent_id: B256, intent: Intent)">
+  Stores or updates an intent.
+</ParamField>
+
+### Transaction Management
+
+<ParamField path="add_transaction" type="fn(&mut self, transaction: StoredTransaction)">
+  Adds a transaction to the state.
+</ParamField>
+
+<ParamField path="get_transactions" type="fn(&self) -> &Vec<StoredTransaction>">
+  Returns all stored transactions.
+</ParamField>
+
+<ParamField path="add_receipt" type="fn(&mut self, tx_hash: String, receipt: TransactionReceipt)">
+  Stores a transaction receipt.
+</ParamField>
+
+<ParamField path="get_receipt" type="fn(&self, tx_hash: &str) -> Option<&TransactionReceipt>">
+  Retrieves a transaction receipt by hash.
+</ParamField>
+
+### State Application
+
+<ParamField path="apply_changes" type="fn(&mut self, bundle_state_manager: BundleStateManager)">
+  Applies changes from a bundle state manager to the persistent state.
+  
+  **Parameters:**
+  - `bundle_state_manager`: Bundle state with changes to apply
+  
+  This method merges all changes from the bundle into the main state:
+  - Updates accounts
+  - Adds blob storage
+  - Updates intents
+  - Applies key-value changes
+  - Stores transactions and receipts
+</ParamField>
+
+### Serialization
+
+<ParamField path="borsh_serialize" type="fn(&self) -> Result<Vec<u8>>">
+  Serializes the state to bytes using Borsh encoding.
+</ParamField>
+
+<ParamField path="borsh_deserialize" type="fn(bytes: &[u8]) -> Result<Self>">
+  Deserializes state from bytes using Borsh encoding.
+  
+  **Parameters:**
+  - `bytes`: Serialized state data
+</ParamField>
+
+### Example
+
+```rust
+use core_lane::{StateManager, Address, U256};
+
+let mut state = StateManager::new();
+let addr = Address::from([1u8; 20]);
+
+// Check initial balance
+assert_eq!(state.get_balance(addr), U256::ZERO);
+
+// Serialize and deserialize
+let serialized = state.borsh_serialize()?;
+let restored = StateManager::borsh_deserialize(&serialized)?;
+```
+
+## BundleStateManager
+
+Manages temporary state changes during bundle execution.
+
+**Location:** `src/state.rs:97`
+
+### Structure
+
+```rust
+pub struct BundleStateManager {
+    pub accounts: BTreeMap<Address, CoreLaneAccount>,
+    pub stored_blobs: BTreeMap<B256, Vec<u8>>,
+    pub kv_storage: BTreeMap<String, Vec<u8>>,
+    pub removed_keys: Vec<String>,
+    pub intents: BTreeMap<B256, Intent>,
+    pub transactions: Vec<StoredTransaction>,
+    pub transaction_receipts: BTreeMap<String, TransactionReceipt>,
+}
+```
+
+### Core Methods
+
+<ParamField path="new" type="fn() -> Self">
+  Creates a new empty bundle state manager.
+</ParamField>
+
+### Account Operations
+
+<ParamField path="get_account" type="fn">
+  ```rust
+  fn get_account<'a>(
+      &'a self,
+      original: &'a StateManager,
+      address: Address,
+  ) -> Option<&'a CoreLaneAccount>
+  ```
+  
+  Retrieves an account, checking bundle state first, then falling back to original state.
+</ParamField>
+
+<ParamField path="get_account_mut" type="fn">
+  ```rust
+  fn get_account_mut(
+      &mut self,
+      original: &StateManager,
+      address: Address,
+  ) -> Option<&mut CoreLaneAccount>
+  ```
+  
+  Gets a mutable reference to an account, copying from original state if needed.
+</ParamField>
+
+<ParamField path="get_balance" type="fn">
+  ```rust
+  fn get_balance(&self, original: &StateManager, address: Address) -> U256
+  ```
+  
+  Gets balance from bundle state or original state.
+</ParamField>
+
+<ParamField path="get_nonce" type="fn">
+  ```rust
+  fn get_nonce(&self, original: &StateManager, address: Address) -> U256
+  ```
+  
+  Gets nonce from bundle state or original state.
+</ParamField>
+
+<ParamField path="add_balance" type="fn">
+  ```rust
+  fn add_balance(
+      &mut self,
+      original: &StateManager,
+      address: Address,
+      amount: U256,
+  ) -> Result<()>
+  ```
+  
+  Adds to an account's balance in the bundle state.
+</ParamField>
+
+<ParamField path="sub_balance" type="fn">
+  ```rust
+  fn sub_balance(
+      &mut self,
+      original: &StateManager,
+      address: Address,
+      amount: U256,
+  ) -> Result<()>
+  ```
+  
+  Subtracts from an account's balance in the bundle state.
+</ParamField>
+
+<ParamField path="increment_nonce" type="fn">
+  ```rust
+  fn increment_nonce(
+      &mut self,
+      original: &StateManager,
+      address: Address,
+  ) -> Result<()>
+  ```
+  
+  Increments an account's nonce in the bundle state.
+</ParamField>
+
+### Blob Operations
+
+<ParamField path="contains_blob" type="fn">
+  ```rust
+  fn contains_blob(&self, original: &StateManager, blob_hash: &B256) -> bool
+  ```
+  
+  Checks if a blob exists in bundle or original state.
+</ParamField>
+
+<ParamField path="insert_blob" type="fn(&mut self, blob_hash: B256, data: Vec<u8>)">
+  Inserts a blob into the bundle state.
+</ParamField>
+
+### Key-Value Operations
+
+<ParamField path="get_kv" type="fn(&self, key: &str) -> Option<&Vec<u8>>">
+  Gets a value from bundle state key-value storage.
+</ParamField>
+
+<ParamField path="insert_kv" type="fn(&mut self, key: String, value: Vec<u8>)">
+  Inserts a key-value pair into bundle state.
+</ParamField>
+
+<ParamField path="remove_kv" type="fn(&mut self, key: &str) -> Option<Vec<u8>>">
+  Removes a key-value pair from bundle state.
+</ParamField>
+
+### Intent Operations
+
+<ParamField path="get_intent" type="fn">
+  ```rust
+  fn get_intent<'a>(
+      &'a self,
+      original: &'a StateManager,
+      intent_id: &B256,
+  ) -> Option<&'a Intent>
+  ```
+  
+  Gets an intent from bundle or original state.
+</ParamField>
+
+<ParamField path="get_intent_mut" type="fn">
+  ```rust
+  fn get_intent_mut(
+      &mut self,
+      original: &StateManager,
+      intent_id: &B256,
+  ) -> Option<&mut Intent>
+  ```
+  
+  Gets a mutable reference to an intent, copying from original if needed.
+</ParamField>
+
+<ParamField path="insert_intent" type="fn(&mut self, intent_id: B256, intent: Intent)">
+  Inserts an intent into the bundle state.
+</ParamField>
+
+### Transaction Operations
+
+<ParamField path="add_transaction" type="fn(&mut self, transaction: StoredTransaction)">
+  Adds a transaction to the bundle state.
+</ParamField>
+
+<ParamField path="add_receipt" type="fn(&mut self, tx_hash: String, receipt: TransactionReceipt)">
+  Adds a transaction receipt to the bundle state.
+</ParamField>
+
+### Serialization
+
+<ParamField path="borsh_serialize" type="fn(&self) -> Result<Vec<u8>>">
+  Serializes the bundle state to bytes using Borsh encoding.
+</ParamField>
+
+<ParamField path="borsh_deserialize" type="fn(bytes: &[u8]) -> Result<Self>">
+  Deserializes bundle state from bytes.
+</ParamField>
+
+### Example Usage
+
+```rust
+use core_lane::{StateManager, BundleStateManager, Address, U256};
+
+let state = StateManager::new();
+let mut bundle = BundleStateManager::new();
+
+let addr = Address::from([1u8; 20]);
+let amount = U256::from(1000);
+
+// Add balance in bundle
+bundle.add_balance(&state, addr, amount)?;
+
+// Check balance in bundle
+assert_eq!(bundle.get_balance(&state, addr), amount);
+
+// Original state unchanged
+assert_eq!(state.get_balance(addr), U256::ZERO);
+
+// Apply changes to state
+let mut new_state = state;
+new_state.apply_changes(bundle);
+assert_eq!(new_state.get_balance(addr), amount);
+```

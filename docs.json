@@ -1,122 +1,103 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Core Lane",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#f7931a",
+    "light": "#ffa940",
+    "dark": "#d87607"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/lanelayer/core-lane"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/lanelayer/core-lane"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Overview",
+            "pages": ["introduction", "quickstart"]
+          },
+          {
+            "group": "Setup & Deployment",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
+              "setup/installation",
+              "setup/configuration",
+              "setup/running-a-node",
+              "setup/development-environment"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/architecture",
+              "concepts/bitcoin-anchoring",
+              "concepts/taproot-da",
+              "concepts/intent-system",
+              "concepts/state-management",
+              "concepts/transaction-processing"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Node Operations",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "operations/node-configuration",
+              "operations/monitoring",
+              "operations/maintenance",
+              "operations/troubleshooting"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Library Integration",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "library/getting-started",
+              "library/state-manager",
+              "library/transaction-execution",
+              "library/bitcoin-client"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "JSON-RPC API",
             "pages": [
-              "api-reference/introduction"
+              "api/overview",
+              "api/ethereum-compatible",
+              "api/core-lane-methods"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Rust Library API",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/library/core-types",
+              "api/library/state-management",
+              "api/library/transaction-processing",
+              "api/library/intents",
+              "api/library/bitcoin-rpc"
+            ]
+          },
+          {
+            "group": "Intent System",
+            "pages": [
+              "api/intents/overview",
+              "api/intents/anchor-bitcoin-fill",
+              "api/intents/risc-v-programs"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

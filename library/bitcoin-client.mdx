@@ -1,0 +1,309 @@
+---
+title: 'Bitcoin RPC Client'
+description: 'Connecting to Bitcoin nodes and performing RPC operations'
+---
+
+Core Lane uses the `corepc-client` library to communicate with Bitcoin nodes via RPC. The library provides type-safe clients for both read and write operations.
+
+## Creating a Client
+
+The `create_bitcoin_rpc_client()` function creates a client that supports both read and write operations:
+
+```rust
+use core_lane::create_bitcoin_rpc_client;
+use std::sync::Arc;
+use anyhow::Result;
+
+fn main() -> Result<()> {
+    let client = create_bitcoin_rpc_client(
+        "http://127.0.0.1:18443",  // RPC URL
+        "user",                     // RPC username
+        "password"                  // RPC password
+    )?;
+    
+    println!("Connected to Bitcoin RPC");
+    Ok(())
+}
+```
+
+### HTTPS Support
+
+The client supports HTTPS connections automatically:
+
+```rust
+let client = create_bitcoin_rpc_client(
+    "https://bitcoin-node.example.com:8332",
+    "user",
+    "password"
+)?;
+```
+
+## Client Types
+
+Core Lane provides two client interfaces:
+
+### BitcoinRpcClient
+
+Full read-write client (type alias for `corepc_client::client_sync::v28::Client`):
+
+```rust
+use core_lane::BitcoinRpcClient;
+use std::sync::Arc;
+
+let client: Arc<BitcoinRpcClient> = create_bitcoin_rpc_client(
+    "http://127.0.0.1:18443",
+    "user",
+    "password"
+)?;
+```
+
+### BitcoinRpcReadClient
+
+Read-only trait for queries and verification:
+
+```rust
+use core_lane::bitcoin_rpc_client::BitcoinRpcReadClient;
+use std::sync::Arc;
+
+let client = create_bitcoin_rpc_client(/* ... */)?;
+let read_client = client.clone() as Arc<dyn BitcoinRpcReadClient>;
+```
+
+## Read Operations
+
+The `BitcoinRpcReadClient` trait provides methods for querying blockchain data:
+
+### Block Height
+
+```rust
+use core_lane::bitcoin_rpc_client::BitcoinRpcReadClient;
+
+let height = client.get_block_count()?;
+println!("Current block height: {}", height);
+```
+
+### Block Hash
+
+```rust
+use bitcoin::BlockHash;
+
+// Get hash for a specific height
+let hash: BlockHash = client.get_block_hash(100)?;
+println!("Block hash: {}", hash);
+
+// Get hash as hex string (avoids byte-order issues)
+let hash_hex: String = client.get_block_hash_hex(100)?;
+println!("Block hash (hex): {}", hash_hex);
+```
+
+### Block Data
+
+```rust
+use bitcoin::{Block, BlockHash};
+
+// Get block by hash
+let hash = client.get_block_hash(100)?;
+let block: Block = client.get_block(&hash)?;
+println!("Block has {} transactions", block.txdata.len());
+
+// Get block by hex hash (recommended to avoid conversion issues)
+let hash_hex = client.get_block_hash_hex(100)?;
+let block: Block = client.get_block_by_hash_hex(&hash_hex)?;
+```
+
+### Transaction Data
+
+```rust
+use bitcoin::{Txid, BlockHash};
+use core_lane::bitcoin_rpc_client::RawTransactionInfo;
+use std::str::FromStr;
+
+let txid = Txid::from_str(
+    "abc123..."
+)?;
+
+// Get transaction (searches all blocks)
+let tx_info: RawTransactionInfo = client.get_raw_transaction_info(
+    &txid,
+    None  // No specific block hash
+)?;
+
+println!("Transaction: {:?}", tx_info.transaction);
+println!("Block hash: {:?}", tx_info.block_hash);
+
+// Get transaction from specific block (faster)
+let block_hash = BlockHash::from_str("def456...")?;
+let tx_info = client.get_raw_transaction_info(&txid, Some(&block_hash))?;
+```
+
+### Blockchain Info
+
+```rust
+use serde_json::Value;
+
+let info: Value = client.getblockchaininfo()?;
+println!("Chain: {}", info["chain"].as_str().unwrap_or("unknown"));
+println!("Blocks: {}", info["blocks"].as_u64().unwrap_or(0));
+```
+
+## Using with CoreLaneStateForLib
+
+The Bitcoin client is required when creating a `CoreLaneStateForLib` for transaction execution:
+
+```rust
+use core_lane::{
+    create_bitcoin_rpc_client, CoreLaneStateForLib, StateManager
+};
+use bitcoin::Network;
+
+let rpc_client = create_bitcoin_rpc_client(
+    "http://127.0.0.1:18443",
+    "user",
+    "password"
+)?;
+
+let state = StateManager::new();
+let context = CoreLaneStateForLib::new(
+    state,
+    rpc_client.clone(),  // Read client
+    rpc_client.clone(),  // Write client (same instance)
+    Network::Regtest
+);
+```
+
+## Network Detection
+
+You can detect the Bitcoin network using `getblockchaininfo`:
+
+```rust
+use bitcoin::Network;
+
+fn detect_network(
+    client: &dyn BitcoinRpcReadClient
+) -> Result<Network> {
+    let info = client.getblockchaininfo()?;
+    let chain = info["chain"].as_str().unwrap_or("main");
+    
+    match chain {
+        "main" => Ok(Network::Bitcoin),
+        "test" => Ok(Network::Testnet),
+        "regtest" => Ok(Network::Regtest),
+        "signet" => Ok(Network::Signet),
+        _ => Ok(Network::Bitcoin),
+    }
+}
+
+let network = detect_network(&*client)?;
+println!("Detected network: {:?}", network);
+```
+
+## Error Handling
+
+RPC operations return `anyhow::Result`:
+
+```rust
+use anyhow::Result;
+
+fn query_block(height: u64) -> Result<()> {
+    let client = create_bitcoin_rpc_client(
+        "http://127.0.0.1:18443",
+        "user",
+        "password"
+    )?;
+    
+    match client.get_block_hash(height) {
+        Ok(hash) => {
+            println!("Block hash: {}", hash);
+            let block = client.get_block(&hash)?;
+            println!("Transactions: {}", block.txdata.len());
+        }
+        Err(e) => {
+            eprintln!("Failed to get block: {}", e);
+        }
+    }
+    
+    Ok(())
+}
+```
+
+## Complete Example
+
+Here's a complete example showing Bitcoin RPC usage:
+
+```rust
+use core_lane::{
+    create_bitcoin_rpc_client,
+    bitcoin_rpc_client::BitcoinRpcReadClient
+};
+use anyhow::Result;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    println!("Connecting to Bitcoin RPC...");
+    
+    let client = create_bitcoin_rpc_client(
+        "http://127.0.0.1:18443",
+        "user",
+        "password"
+    )?;
+    
+    // Get current height
+    let height = client.get_block_count()?;
+    println!("Current block height: {}", height);
+    
+    // Get recent block
+    if height > 0 {
+        let hash_hex = client.get_block_hash_hex(height)?;
+        println!("Latest block hash: {}", hash_hex);
+        
+        let block = client.get_block_by_hash_hex(&hash_hex)?;
+        println!("Block merkle root: {}", block.header.merkle_root);
+        println!("Number of transactions: {}", block.txdata.len());
+        
+        // Show first transaction (coinbase)
+        if let Some(tx) = block.txdata.first() {
+            println!("Coinbase txid: {}", tx.compute_txid());
+        }
+    }
+    
+    // Get blockchain info
+    let info = client.getblockchaininfo()?;
+    println!("\nChain: {}", info["chain"].as_str().unwrap_or("unknown"));
+    println!("Difficulty: {}", info["difficulty"].as_f64().unwrap_or(0.0));
+    
+    Ok(())
+}
+```
+
+## Connection Configuration
+
+The client uses `corepc-client` which supports:
+
+- **Connect timeout**: 10 seconds
+- **Request timeout**: 30 seconds
+- **HTTP and HTTPS**: Automatic protocol detection
+- **Basic authentication**: Username and password
+
+## Alternative: HttpBitcoinRpcClient
+
+Core Lane also includes an HTTP-only fallback client:
+
+```rust
+use core_lane::bitcoin_rpc_client::HttpBitcoinRpcClient;
+
+let client = HttpBitcoinRpcClient::new(
+    "http://127.0.0.1:18443".to_string(),
+    Some("user".to_string()),
+    Some("password".to_string())
+)?;
+
+let height = client.get_block_count()?;
+println!("Height: {}", height);
+```
+
+However, `create_bitcoin_rpc_client()` is recommended as it uses the more robust `corepc-client` implementation.
+
+## See Also
+
+- [Transaction Execution](/library/transaction-execution) - Using Bitcoin client with transaction processing
+- [Getting Started](/library/getting-started) - Library setup and basic usage

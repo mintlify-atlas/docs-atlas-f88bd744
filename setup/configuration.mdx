@@ -1,0 +1,351 @@
+---
+title: 'Configuration'
+description: 'Configure Core Lane node settings, environment variables, and command-line options'
+---
+
+## Configuration Overview
+
+Core Lane can be configured through:
+1. **Command-line arguments** (highest priority)
+2. **Environment variables** (medium priority)
+3. **Default values** (lowest priority)
+
+## Global Options
+
+These options apply to all Core Lane commands:
+
+<ParamField path="--plain" type="boolean" default="false">
+  Enable plain output mode with no emojis for machine-readable output
+</ParamField>
+
+<ParamField path="--data-dir" type="string" default=".">
+  Data directory for wallet databases, blockchain state, and block data. Used for storing:
+  - Wallet databases (`wallet_{network}.sqlite3`)
+  - Block state files (`blocks/`)
+  - Metastate files (`metastate/`)
+  - Chain index (`chain_index/`)
+  - Chain tip marker (`tip`)
+</ParamField>
+
+## Environment Variables
+
+### Mnemonic Configuration
+
+<ParamField path="CORE_LANE_MNEMONIC" type="string">
+  BIP-39 mnemonic phrase for wallet recovery. Used as fallback when `--mnemonic` or `--mnemonic-file` are not provided.
+  
+  **Security Note**: Using environment variables is more secure than command-line arguments, but `--mnemonic-file` is recommended for production.
+</ParamField>
+
+### Docker Environment Variables
+
+When running Core Lane in Docker (see `fly.toml` configuration):
+
+<ParamField path="HTTP_HOST" type="string" default="0.0.0.0">
+  HTTP server bind address
+</ParamField>
+
+<ParamField path="HTTP_PORT" type="string" default="8545">
+  HTTP server port for JSON-RPC
+</ParamField>
+
+<ParamField path="DATA_DIR" type="string" default="/data">
+  Persistent data directory (mounted volume in production)
+</ParamField>
+
+<ParamField path="NETWORK" type="string" default="mainnet">
+  Bitcoin network: `mainnet`, `testnet`, `testnet4`, `signet`, or `regtest`
+</ParamField>
+
+<ParamField path="ELECTRUM_URL" type="string">
+  Electrum server URL for blockchain sync (e.g., `ssl://electrum.blockstream.info:50002`)
+</ParamField>
+
+<ParamField path="BITCOIN_CACHE_HOST" type="string">
+  Bitcoin cache RPC host for faster block access
+</ParamField>
+
+<ParamField path="BITCOIN_CACHE_PORT" type="string" default="8545">
+  Bitcoin cache RPC port
+</ParamField>
+
+<ParamField path="ONLY_START" type="string">
+  Component to start (e.g., `core-lane` for RPC-only mode)
+</ParamField>
+
+## Network Configuration
+
+### Bitcoin Networks
+
+Core Lane supports all Bitcoin networks:
+
+- **`bitcoin` / `mainnet`**: Bitcoin mainnet (production)
+- **`testnet`**: Bitcoin testnet3 (legacy testnet)
+- **`testnet4`**: Bitcoin testnet4 (new testnet)
+- **`signet`**: Bitcoin signet (stable testnet)
+- **`regtest`**: Bitcoin regression test network (local development)
+
+### Network-Specific Settings
+
+<CodeGroup>
+```bash Mainnet
+# Requires Electrum server for blockchain sync
+--network bitcoin \
+--electrum-url ssl://electrum.blockstream.info:50002
+```
+
+```bash Testnet
+--network testnet \
+--electrum-url ssl://electrum.blockstream.info:60002
+```
+
+```bash Regtest (Local Development)
+# Requires Bitcoin Core RPC
+--network regtest \
+--bitcoin-rpc-read-url http://127.0.0.1:18443 \
+--bitcoin-rpc-read-user bitcoin \
+--bitcoin-rpc-read-password bitcoin123
+```
+</CodeGroup>
+
+## Wallet Configuration
+
+### Mnemonic Security Levels
+
+Core Lane offers three methods for providing mnemonics (in order of security):
+
+<Steps>
+  <Step title="File-based (Most Secure)">
+    Store mnemonic in a protected file:
+    
+    ```bash
+    echo "your twelve word mnemonic phrase here" > .mnemonic
+    chmod 600 .mnemonic
+    core-lane-node start --mnemonic-file .mnemonic
+    ```
+    
+    ✅ Not visible in process list  
+    ✅ Can use file permissions  
+    ✅ Recommended for production
+  </Step>
+  
+  <Step title="Environment Variable (Secure)">
+    Set via environment variable:
+    
+    ```bash
+    export CORE_LANE_MNEMONIC="your twelve word mnemonic phrase here"
+    core-lane-node start
+    ```
+    
+    ✅ Not visible in process list  
+    ⚠️ Visible in process environment
+  </Step>
+  
+  <Step title="Command-line Argument (Least Secure)">
+    Pass directly as argument:
+    
+    ```bash
+    core-lane-node start --mnemonic "your twelve word mnemonic phrase here"
+    ```
+    
+    ⚠️ Visible in process list  
+    ⚠️ Stored in shell history  
+    ❌ Not recommended for production
+  </Step>
+</Steps>
+
+### Wallet Database Paths
+
+Wallets are stored as SQLite databases:
+
+```
+{data_dir}/wallet_{network}.sqlite3
+```
+
+Examples:
+- `./wallet_regtest.sqlite3`
+- `/data/wallet_mainnet.sqlite3`
+- `/data/wallet_testnet4.sqlite3`
+
+## Data Directory Structure
+
+Core Lane organizes persistent data as follows:
+
+```
+{data_dir}/
+├── wallet_{network}.sqlite3   # BDK wallet database
+├── blocks/                    # State snapshots per block
+│   ├── 0                      # Genesis state
+│   ├── 1                      # Block 1 state
+│   └── ...                    # Additional blocks
+├── metastate/                 # EIP-1559 and fee data
+│   ├── 0                      # Genesis metastate
+│   └── ...                    # Per-block metastate
+├── deltas/                    # State deltas (bundles)
+│   └── ...                    # Per-block deltas
+├── chain_index/               # Block number to Bitcoin height mapping
+│   └── ...                    # Index entries
+└── tip                        # Current chain tip marker
+```
+
+### State Persistence
+
+Core Lane uses crash-safe persistence:
+
+- **Atomic writes**: All writes use temp file + rename + sync
+- **Tip marker**: The `tip` file is the source of truth for restore
+- **Format versioning**: Tip includes version byte (current: `4`)
+- **State snapshots**: Full state saved for each block
+- **Reorg handling**: Can rollback to any previous block
+
+### Data Cleanup
+
+If the tip file version changes, all block data is automatically wiped for a fresh start:
+
+```bash
+# Block data directories cleared on version mismatch:
+# - blocks/
+# - metastate/
+# - deltas/
+# - chain_index/
+# - tip
+```
+
+## Bitcoin RPC Configuration
+
+### Read vs Write Clients
+
+Core Lane separates Bitcoin RPC operations:
+
+<ParamField path="bitcoin-rpc-read-*" type="string">
+  **Read client**: Used for blockchain queries (required)
+  - `--bitcoin-rpc-read-url` (default: `http://127.0.0.1:18443`)
+  - `--bitcoin-rpc-read-user` (default: `user`)
+  - `--bitcoin-rpc-read-password` (required)
+</ParamField>
+
+<ParamField path="bitcoin-rpc-write-*" type="string">
+  **Write client**: Used for wallet operations (optional)
+  - `--bitcoin-rpc-write-url` (defaults to read URL)
+  - `--bitcoin-rpc-write-user` (defaults to read user)
+  - `--bitcoin-rpc-write-password` (defaults to read password)
+</ParamField>
+
+### Why Separate Clients?
+
+Separating read and write allows:
+- Different authentication for safety
+- Read-only public endpoints for queries
+- Write operations to secured wallets
+
+## EIP-1559 Fee Management
+
+Core Lane implements EIP-1559 for dynamic fee calculation:
+
+### Default Configuration
+
+- **Initial Base Fee**: 1 gwei
+- **Max Gas Limit**: 30,000,000 gas per block
+- **Target Gas Usage**: 15,000,000 gas (50% of max)
+- **Base Fee Adjustment**: ±12.5% per block based on usage
+
+### Fee Burning
+
+Base fees are burned (removed from circulation):
+- Tracked in `total_burned_amount` (metastate)
+- Priority fees go to sequencer address
+- Gas usage affects next block's base fee
+
+## Sequencer Configuration
+
+<ParamField path="--sequencer-address" type="address">
+  Ethereum address that receives priority fees from transactions.
+  
+  **Default**: `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266` (Anvil test address #0)
+  
+  ⚠️ **Production Warning**: The default address is for testing only. Always set a custom sequencer address in production.
+</ParamField>
+
+<ParamField path="--sequencer-rpc-url" type="url">
+  If set, `eth_sendRawTransaction` forwards transactions to this sequencer endpoint instead of processing locally.
+  
+  Use this for light client mode where transaction submission is delegated to a sequencer.
+</ParamField>
+
+## Operational Modes
+
+### On-Demand Polling Mode
+
+<ParamField path="--on-demand-polling" type="boolean" default="false">
+  Disable automatic block scanning. When enabled:
+  - Node waits for `POST /do_poll` requests
+  - Useful for testing and controlled environments
+  - Reduces resource usage when not actively scanning
+</ParamField>
+
+### Derived Chain Modes
+
+Core Lane can operate as a derived chain reading from:
+
+1. **Bitcoin (Default)**: Reads taproot data from Bitcoin blocks
+2. **Derived Core Lane**: Reads from another Core Lane instance via `DerivedStart`
+3. **Espresso**: Reads from Espresso DA via `DerivedEspressoStart`
+
+## Configuration Examples
+
+<CodeGroup>
+```bash Production (Mainnet)
+core-lane-node start \
+  --data-dir /var/lib/core-lane \
+  --network mainnet \
+  --electrum-url ssl://electrum.blockstream.info:50002 \
+  --mnemonic-file /etc/core-lane/mnemonic \
+  --http-host 0.0.0.0 \
+  --http-port 8545 \
+  --sequencer-address 0xYourSequencerAddress \
+  --start-block 800000
+```
+
+```bash Development (Regtest)
+core-lane-node start \
+  --data-dir ./data \
+  --network regtest \
+  --bitcoin-rpc-read-url http://127.0.0.1:18443 \
+  --bitcoin-rpc-read-user bitcoin \
+  --bitcoin-rpc-read-password bitcoin123 \
+  --mnemonic-file .dev-wallets/mnemonic_regtest.txt \
+  --http-host 127.0.0.1 \
+  --http-port 8546 \
+  --start-block 0
+```
+
+```bash Testnet
+core-lane-node start \
+  --data-dir ./testnet-data \
+  --network testnet \
+  --electrum-url ssl://electrum.blockstream.info:60002 \
+  --mnemonic-file ~/.core-lane/testnet-mnemonic \
+  --http-host 127.0.0.1 \
+  --http-port 8545
+```
+
+```bash Light Client (Forwarding to Sequencer)
+core-lane-node start \
+  --network mainnet \
+  --electrum-url ssl://electrum.blockstream.info:50002 \
+  --mnemonic-file /etc/core-lane/mnemonic \
+  --sequencer-rpc-url https://sequencer.corelane.example.com \
+  --http-port 8545
+```
+</CodeGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Running a Node" icon="server" href="/setup/running-a-node">
+    Start and operate your Core Lane node
+  </Card>
+  <Card title="Development Environment" icon="code" href="/setup/development-environment">
+    Set up local development with automated testing
+  </Card>
+</CardGroup>

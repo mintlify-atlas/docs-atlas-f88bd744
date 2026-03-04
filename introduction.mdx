@@ -1,0 +1,239 @@
+---
+title: Introduction to Core Lane
+description: Learn about Core Lane, a Bitcoin-anchored blockchain execution environment with Taproot DA and intent-based transactions
+---
+
+## What is Core Lane?
+
+Core Lane is a Bitcoin-anchored execution environment that combines the security and immutability of Bitcoin with a flexible, intent-based transaction model. Every Core Lane block is anchored to the Bitcoin blockchain, providing trustless data availability and verifiable execution.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Bitcoin Anchoring" icon="bitcoin">
+    Every Core Lane block is anchored to Bitcoin, inheriting the security and immutability of the Bitcoin network. Transaction bundles are permanently recorded on Bitcoin's blockchain.
+  </Card>
+  
+  <Card title="Taproot Data Availability" icon="database">
+    Uses Bitcoin's Taproot scripting to store transaction bundle data on-chain, ensuring data availability without relying on trusted third parties.
+  </Card>
+  
+  <Card title="Intent-Based Transactions" icon="bolt">
+    Express desired outcomes rather than explicit execution paths. Core Lane supports cross-chain intents and programmable transaction execution.
+  </Card>
+  
+  <Card title="RISC-V Execution" icon="microchip">
+    Run verifiable computations using Cartesi Machine for deterministic RISC-V program execution within the intent system.
+  </Card>
+</CardGroup>
+
+## Architecture Overview
+
+Core Lane operates as a layer that anchors to Bitcoin while providing an Ethereum-compatible JSON-RPC API. Here's how the key components work together:
+
+### Core Components
+
+<AccordionGroup>
+  <Accordion title="State Manager" icon="layer-group">
+    The `StateManager` maintains account balances, nonces, storage, and transaction receipts. It uses a copy-on-write pattern through `BundleStateManager` for atomic state updates.
+    
+    ```rust
+    pub struct StateManager {
+        accounts: BTreeMap<Address, CoreLaneAccount>,
+        stored_blobs: BTreeMap<B256, Vec<u8>>,
+        kv_storage: BTreeMap<String, Vec<u8>>,
+        intents: BTreeMap<B256, Intent>,
+        transactions: Vec<StoredTransaction>,
+        transaction_receipts: BTreeMap<String, TransactionReceipt>,
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Bitcoin Block Processor" icon="cube">
+    Scans Bitcoin blocks for Core Lane transaction bundles embedded in Taproot scripts. Each bundle contains transactions that are processed to produce a new Core Lane block.
+    
+    The processor:
+    - Monitors Bitcoin blocks for bundle anchors
+    - Extracts and decompresses bundle data
+    - Validates bundle signatures
+    - Processes transactions in the correct order (sequencer bundles → burns → user bundles)
+  </Accordion>
+  
+  <Accordion title="Intent System" icon="bullseye">
+    Enables declarative transactions where users specify desired outcomes. The system supports:
+    
+    - **Anchor Bitcoin Fill**: Cross-chain intents to fill Bitcoin-based orders
+    - **RISC-V Programs**: Execute verifiable computations via Cartesi Machine
+    
+    Intents are created, tracked, and can be filled by other participants in the network.
+  </Accordion>
+  
+  <Accordion title="Taproot DA" icon="scroll">
+    Handles data availability by encoding transaction bundles into Bitcoin Taproot scripts:
+    
+    - Bundles are compressed using Brotli
+    - Data is split into chunks that fit within Taproot witness limits
+    - Each chunk is committed to a Taproot output
+    - The entire bundle can be reconstructed from Bitcoin block data
+  </Accordion>
+  
+  <Accordion title="JSON-RPC Server" icon="server">
+    Provides Ethereum-compatible JSON-RPC endpoints on port 8545 (configurable):
+    
+    - `eth_getBalance`: Query account balances
+    - `eth_getTransactionCount`: Get account nonces
+    - `eth_sendRawTransaction`: Submit signed transactions
+    - `eth_call`: Execute read-only calls
+    - And many more standard Ethereum methods
+  </Accordion>
+</AccordionGroup>
+
+## Block Production Flow
+
+Core Lane blocks are produced by processing Bitcoin blocks:
+
+<Steps>
+  <Step title="Bitcoin Block Scan">
+    The node scans Bitcoin blocks for Taproot outputs containing Core Lane bundle data. Bundles are identified by specific script patterns.
+  </Step>
+  
+  <Step title="Bundle Extraction">
+    Bundle data is extracted from Taproot witnesses, decompressed, and decoded from CBOR format. Signature verification ensures bundle authenticity.
+  </Step>
+  
+  <Step title="Transaction Processing">
+    Transactions are processed in three phases:
+    
+    1. **Phase 1**: Sequencer head bundles (priority execution)
+    2. **Phase 2**: Burn transactions (Bitcoin → Core Lane bridging)
+    3. **Phase 3**: Standard bundles and user transactions
+  </Step>
+  
+  <Step title="State Update">
+    All state changes are applied atomically. The new state is persisted to disk along with the chain tip and block index.
+  </Step>
+  
+  <Step title="Block Finalization">
+    A new Core Lane block is created with:
+    - Block number
+    - Bitcoin anchor height and hash
+    - Transaction list and receipts
+    - Updated account states
+  </Step>
+</Steps>
+
+## Transaction Types
+
+Core Lane supports several transaction types:
+
+### Standard Transactions
+
+Regular Ethereum-style transactions (EIP-1559 format) that:
+- Transfer value between accounts
+- Call smart contract-like functions
+- Update account state
+
+### Burn Transactions
+
+Bridge Bitcoin to Core Lane by burning BTC:
+- BTC is sent to an unspendable output on Bitcoin
+- Core Lane mints equivalent balance to specified address
+- Enables Bitcoin-backed assets on Core Lane
+
+### Intent Transactions
+
+Declarative transactions that express desired outcomes:
+- Cross-chain order fills
+- Verifiable computation requests
+- Programmable execution paths
+
+## Network Types
+
+Core Lane can operate on different Bitcoin networks:
+
+<CodeGroup>
+
+```bash Regtest (Local Development)
+# Fast, local testing with instant block generation
+core-lane-node start \
+  --bitcoin-rpc-read-url http://127.0.0.1:18443 \
+  --bitcoin-rpc-read-user bitcoin \
+  --bitcoin-rpc-read-password bitcoin123 \
+  --mnemonic-file .dev-wallets/mnemonic_regtest.txt
+```
+
+```bash Testnet
+# Bitcoin testnet for public testing
+core-lane-node start \
+  --bitcoin-rpc-read-url https://testnet-node.example.com \
+  --bitcoin-rpc-read-user user \
+  --bitcoin-rpc-read-password pass \
+  --electrum-url ssl://electrum.blockstream.info:60002 \
+  --mnemonic-file /secure/path/mnemonic.txt
+```
+
+```bash Mainnet
+# Bitcoin mainnet for production
+core-lane-node start \
+  --bitcoin-rpc-read-url https://mainnet-node.example.com \
+  --bitcoin-rpc-read-user user \
+  --bitcoin-rpc-read-password pass \
+  --electrum-url ssl://electrum.blockstream.info:50002 \
+  --mnemonic-file /secure/path/mnemonic.txt
+```
+
+</CodeGroup>
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Bitcoin-Backed DeFi" icon="coins">
+    Build decentralized finance applications backed by Bitcoin's security and liquidity.
+  </Card>
+  
+  <Card title="Verifiable Computation" icon="check-double">
+    Execute RISC-V programs with verifiable results anchored to Bitcoin.
+  </Card>
+  
+  <Card title="Cross-Chain Intents" icon="arrows-left-right">
+    Create intent-based transactions that can fill orders across different chains.
+  </Card>
+  
+  <Card title="Data Availability" icon="database">
+    Store application data on Bitcoin with guaranteed availability and immutability.
+  </Card>
+</CardGroup>
+
+## Design Philosophy
+
+Core Lane is built on several key principles:
+
+1. **Bitcoin as the Source of Truth**: Every Core Lane block is anchored to Bitcoin, making Bitcoin the ultimate arbiter of state
+
+2. **Data Availability First**: All transaction data is stored on Bitcoin, eliminating reliance on external data availability layers
+
+3. **Intent-Based Execution**: Users express desired outcomes rather than specific execution paths, enabling more flexible transaction models
+
+4. **Ethereum Compatibility**: JSON-RPC API compatibility allows existing Ethereum tools and libraries to work with Core Lane
+
+5. **Verifiable Computation**: Support for deterministic RISC-V execution ensures computations can be verified by any participant
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart Guide" icon="rocket" href="/quickstart">
+    Get your Core Lane node running in minutes
+  </Card>
+  
+  <Card title="Architecture Deep Dive" icon="diagram-project" href="/concepts/architecture">
+    Understand Core Lane's technical architecture
+  </Card>
+  
+  <Card title="JSON-RPC API" icon="code" href="/api/overview">
+    Explore the API endpoints
+  </Card>
+  
+  <Card title="Development Environment" icon="terminal" href="/setup/development-environment">
+    Set up a local development environment
+  </Card>
+</CardGroup>

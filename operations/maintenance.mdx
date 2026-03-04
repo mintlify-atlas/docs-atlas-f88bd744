@@ -1,0 +1,605 @@
+---
+title: Maintenance Procedures
+description: Routine maintenance tasks and operational procedures
+---
+
+## Routine Maintenance
+
+### Health Checks
+
+Perform regular health checks to ensure node stability:
+
+```bash
+# Check node health
+curl -s http://localhost:8545/health | jq '.'
+
+# Verify block progression
+BLOCK1=$(curl -s http://localhost:8545/health | jq '.latest_block')
+sleep 60
+BLOCK2=$(curl -s http://localhost:8545/health | jq '.latest_block')
+echo "Blocks processed: $((BLOCK2 - BLOCK1))"
+```
+
+### Wallet Balance Verification
+
+Regularly check the node's Bitcoin wallet balance:
+
+```bash
+# Using the node binary
+core-lane-node get-bitcoin-balance \
+  --network mainnet \
+  --mnemonic-file /secure/mnemonic.txt \
+  --electrum-url ssl://electrum.blockstream.info:50002
+
+# Via RPC (requires wallet endpoint)
+curl -X POST http://localhost:8545/wallet/balance
+```
+
+### Log Review
+
+Review logs for errors and warnings:
+
+```bash
+# Check for errors in the last hour
+journalctl -u core-lane-node --since "1 hour ago" | grep -i error
+
+# Review warnings
+journalctl -u core-lane-node --since "1 day ago" | grep -i warn
+
+# Check for reorg events
+grep -i "reorg" /var/log/core-lane/node.log
+```
+
+## Data Management
+
+### Disk Space Monitoring
+
+Core Lane stores persistent state that grows over time. Monitor disk usage:
+
+```bash
+# Check total data directory size
+du -sh /data
+
+# Break down by subdirectory
+du -sh /data/blocks /data/metastate /data/deltas /data/chain_index
+
+# Estimate growth rate
+df -h /data
+```
+
+**Expected growth rates**:
+- Regtest (active development): 10-100 MB/day
+- Testnet: 100-500 MB/day  
+- Mainnet: 500 MB - 2 GB/day (depends on activity)
+
+<Warning>
+  Ensure adequate disk space. Core Lane does not automatically prune old state. Plan for at least 100GB free space for mainnet nodes.
+</Warning>
+
+### Database Maintenance
+
+Wallet databases are SQLite files that may benefit from periodic optimization:
+
+```bash
+# Vacuum the wallet database (reduces file size)
+sqlite3 /data/wallet_mainnet.sqlite3 "VACUUM;"
+
+# Check database integrity
+sqlite3 /data/wallet_mainnet.sqlite3 "PRAGMA integrity_check;"
+```
+
+### Backup Procedures
+
+#### State Backup
+
+Back up critical node state:
+
+```bash
+#!/bin/bash
+# backup-core-lane.sh
+
+DATA_DIR="/data"
+BACKUP_DIR="/backups/core-lane"
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+
+mkdir -p "$BACKUP_DIR"
+
+# Create backup
+tar -czf "$BACKUP_DIR/core-lane-state-$TIMESTAMP.tar.gz" \
+  "$DATA_DIR/tip" \
+  "$DATA_DIR/blocks" \
+  "$DATA_DIR/metastate" \
+  "$DATA_DIR/chain_index" \
+  "$DATA_DIR/wallet_*.sqlite3"
+
+echo "Backup created: core-lane-state-$TIMESTAMP.tar.gz"
+
+# Keep only last 7 backups
+ls -t "$BACKUP_DIR"/core-lane-state-*.tar.gz | tail -n +8 | xargs rm -f
+```
+
+#### Wallet-Only Backup
+
+```bash
+# Backup just the wallet (smaller, faster)
+cp /data/wallet_mainnet.sqlite3 /backups/wallet-$(date +%Y%m%d).sqlite3
+
+# Encrypted backup
+tar -czf - /data/wallet_*.sqlite3 | \
+  gpg --encrypt --recipient your-key@example.com \
+  > /backups/wallets-$(date +%Y%m%d).tar.gz.gpg
+```
+
+<Warning>
+  Always encrypt wallet backups. Wallet databases contain private keys that can spend funds.
+</Warning>
+
+#### Restore from Backup
+
+```bash
+#!/bin/bash
+# restore-core-lane.sh
+
+BACKUP_FILE="/backups/core-lane-state-20240115-120000.tar.gz"
+DATA_DIR="/data"
+
+# Stop the node first
+systemctl stop core-lane-node
+
+# Clear existing state
+rm -rf "$DATA_DIR/blocks" "$DATA_DIR/metastate" "$DATA_DIR/deltas" \
+       "$DATA_DIR/chain_index" "$DATA_DIR/tip"
+
+# Extract backup
+tar -xzf "$BACKUP_FILE" -C /
+
+# Restart node
+systemctl start core-lane-node
+
+echo "Restore complete. Check logs: journalctl -u core-lane-node -f"
+```
+
+### State Cleanup (Fresh Start)
+
+To completely reset the node state and start from genesis:
+
+```bash
+# Stop the node
+systemctl stop core-lane-node
+
+# Backup first (optional but recommended)
+tar -czf /backups/pre-wipe-$(date +%Y%m%d).tar.gz /data
+
+# Remove all block data and state
+rm -rf /data/blocks /data/metastate /data/deltas /data/chain_index /data/tip
+
+# Wallet is preserved - only remove if you have a backup
+# rm /data/wallet_*.sqlite3
+
+# Restart node (will start from genesis)
+systemctl start core-lane-node
+```
+
+<Warning>
+  Removing the tip file triggers a full state wipe. The node will restart from block 0 and re-process the entire chain.
+</Warning>
+
+## Node Upgrades
+
+### Pre-Upgrade Checklist
+
+1. **Backup current state**:
+   ```bash
+   ./backup-core-lane.sh
+   ```
+
+2. **Check release notes** for breaking changes
+
+3. **Verify disk space** for new binary
+
+4. **Schedule downtime window** (if required)
+
+### Rolling Upgrade
+
+```bash
+#!/bin/bash
+# upgrade-core-lane.sh
+
+NEW_VERSION="v0.2.0"
+BINARY_URL="https://github.com/lanelayer/core-lane/releases/download/$NEW_VERSION/core-lane-node"
+
+# Download new binary
+wget -O /tmp/core-lane-node-new "$BINARY_URL"
+chmod +x /tmp/core-lane-node-new
+
+# Verify version
+/tmp/core-lane-node-new --version
+
+# Stop current node
+systemctl stop core-lane-node
+
+# Backup current binary
+cp /usr/local/bin/core-lane-node /usr/local/bin/core-lane-node.backup
+
+# Install new binary
+mv /tmp/core-lane-node-new /usr/local/bin/core-lane-node
+
+# Start with new version
+systemctl start core-lane-node
+
+# Monitor logs
+journalctl -u core-lane-node -f
+```
+
+### Rollback Procedure
+
+If the upgrade fails:
+
+```bash
+# Stop failed version
+systemctl stop core-lane-node
+
+# Restore old binary
+mv /usr/local/bin/core-lane-node.backup /usr/local/bin/core-lane-node
+
+# Restore state backup (if needed)
+./restore-core-lane.sh
+
+# Restart
+systemctl start core-lane-node
+```
+
+### Docker Image Updates
+
+```bash
+# Pull new image
+docker pull ghcr.io/lanelayer/core-lane/core-lane:v0.2.0
+
+# Stop current container
+docker stop core-lane-node
+
+# Remove old container (data is in volume, preserved)
+docker rm core-lane-node
+
+# Start with new image
+docker run -d --name core-lane-node \
+  -v core_lane_data:/data \
+  -p 8545:8545 \
+  -e CORE_LANE_MNEMONIC="$MNEMONIC" \
+  ghcr.io/lanelayer/core-lane/core-lane:v0.2.0
+```
+
+## Performance Optimization
+
+### Disk I/O Optimization
+
+Core Lane performs frequent disk writes. Optimize I/O performance:
+
+**Use SSD storage**:
+- Recommended: NVMe SSD for `/data`
+- Minimum: SATA SSD
+- Not recommended: HDD (too slow for production)
+
+**Mount options** (Linux):
+```bash
+# /etc/fstab entry for data volume
+/dev/nvme0n1 /data ext4 noatime,nodiratime 0 2
+```
+
+**I/O scheduler** (Linux):
+```bash
+# For SSD/NVMe, use 'none' or 'mq-deadline'
+echo none > /sys/block/nvme0n1/queue/scheduler
+
+# Make persistent (add to /etc/rc.local or udev rule)
+```
+
+### Memory Management
+
+Core Lane's memory usage grows with chain size:
+
+```bash
+# Check current memory usage
+ps aux | grep core-lane-node | awk '{print $6/1024 "MB"}'
+
+# Set memory limits (systemd)
+[Service]
+MemoryLimit=2G
+MemoryHigh=1.5G
+```
+
+### Database Optimization
+
+Optimize SQLite wallet databases:
+
+```bash
+# Enable WAL mode (faster writes)
+sqlite3 /data/wallet_mainnet.sqlite3 "PRAGMA journal_mode=WAL;"
+
+# Increase cache size
+sqlite3 /data/wallet_mainnet.sqlite3 "PRAGMA cache_size=-64000;"
+```
+
+## Security Maintenance
+
+### Mnemonic Rotation
+
+Rotate wallet mnemonics periodically:
+
+```bash
+# 1. Create new wallet
+core-lane-node create-wallet \
+  --network mainnet \
+  --electrum-url ssl://electrum.blockstream.info:50002
+
+# Save new mnemonic securely
+# Output: "word1 word2 ... word12"
+
+# 2. Transfer funds from old wallet to new wallet
+# (Use your preferred method to send BTC)
+
+# 3. Update node configuration with new mnemonic
+# 4. Restart node with new mnemonic file
+```
+
+### Access Control
+
+Review and restrict access:
+
+```bash
+# Set restrictive permissions on data directory
+chmod 700 /data
+chown core-lane:core-lane /data
+
+# Protect mnemonic file
+chmod 400 /secure/mnemonic.txt
+chown core-lane:core-lane /secure/mnemonic.txt
+
+# Restrict RPC access (bind to localhost only)
+# Use --http-host 127.0.0.1 instead of 0.0.0.0
+```
+
+### Firewall Rules
+
+```bash
+# Allow only necessary ports
+# Bitcoin RPC (if separate node)
+sudo ufw allow from <trusted-ip> to any port 8332
+
+# Core Lane RPC (restrict to specific IPs)
+sudo ufw allow from <trusted-ip> to any port 8545
+
+# Deny all other inbound
+sudo ufw default deny incoming
+sudo ufw enable
+```
+
+## Reorg Handling
+
+Core Lane automatically handles Bitcoin blockchain reorganizations. No manual intervention is typically required.
+
+### Monitoring Reorgs
+
+Check reorg frequency:
+
+```bash
+# Query reorg count
+curl -s http://localhost:8545/health | jq '.reorgs_detected'
+
+# Check logs for recent reorgs
+grep -i "reorg" /var/log/core-lane/node.log | tail -10
+```
+
+**Expected reorg rates**:
+- Mainnet: Rare (< 1 per month)
+- Testnet: Occasional (1-5 per week)
+- Regtest (dev): Frequent (if REORG=1 is set)
+
+### Manual Reorg Recovery
+
+If automatic reorg handling fails:
+
+```bash
+# 1. Stop the node
+systemctl stop core-lane-node
+
+# 2. Restore from last known good backup
+./restore-core-lane.sh
+
+# 3. Restart node
+systemctl start core-lane-node
+
+# 4. Monitor recovery
+journalctl -u core-lane-node -f
+```
+
+## Service Management
+
+### systemd Service
+
+Example systemd unit file:
+
+```ini
+# /etc/systemd/system/core-lane-node.service
+[Unit]
+Description=Core Lane Node
+After=network.target
+
+[Service]
+Type=simple
+User=core-lane
+Group=core-lane
+WorkingDirectory=/data
+Environment="RUST_LOG=info"
+EnvironmentFile=/etc/core-lane/env
+ExecStart=/usr/local/bin/core-lane-node start \
+  --bitcoin-rpc-read-url http://127.0.0.1:8332 \
+  --bitcoin-rpc-read-user ${BTC_RPC_USER} \
+  --bitcoin-rpc-read-password ${BTC_RPC_PASSWORD} \
+  --mnemonic-file /secure/mnemonic.txt \
+  --http-host 0.0.0.0 \
+  --http-port 8545 \
+  --data-dir /data
+
+Restart=always
+RestartSec=10
+MemoryLimit=2G
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Manage the service:
+
+```bash
+# Start service
+sudo systemctl start core-lane-node
+
+# Enable on boot
+sudo systemctl enable core-lane-node
+
+# Check status
+sudo systemctl status core-lane-node
+
+# View logs
+sudo journalctl -u core-lane-node -f
+
+# Restart service
+sudo systemctl restart core-lane-node
+```
+
+### Environment File
+
+```bash
+# /etc/core-lane/env
+BTC_RPC_USER=bitcoin
+BTC_RPC_PASSWORD=your-secure-password
+RUST_LOG=info
+```
+
+## Scheduled Maintenance
+
+### Daily Tasks
+
+```bash
+# /etc/cron.daily/core-lane-health
+#!/bin/bash
+curl -s http://localhost:8545/health > /var/log/core-lane/health-$(date +%Y%m%d).json
+```
+
+### Weekly Tasks
+
+```bash
+# /etc/cron.weekly/core-lane-backup
+#!/bin/bash
+/usr/local/bin/backup-core-lane.sh
+
+# Vacuum wallet database
+sqlite3 /data/wallet_mainnet.sqlite3 "VACUUM;"
+```
+
+### Monthly Tasks
+
+```bash
+# /etc/cron.monthly/core-lane-audit
+#!/bin/bash
+# Review disk usage trends
+du -sh /data >> /var/log/core-lane/disk-usage.log
+
+# Archive old logs
+find /var/log/core-lane -name "*.log" -mtime +30 -exec gzip {} \;
+
+# Review security
+last | grep core-lane
+```
+
+## Disaster Recovery
+
+### Recovery Scenarios
+
+#### Scenario 1: Corrupted State
+
+**Symptoms**: Node fails to start, state deserialization errors
+
+**Recovery**:
+```bash
+# Stop node
+systemctl stop core-lane-node
+
+# Restore from backup
+tar -xzf /backups/core-lane-state-latest.tar.gz -C /
+
+# Start node
+systemctl start core-lane-node
+```
+
+#### Scenario 2: Lost Mnemonic
+
+**Symptoms**: Cannot access wallet
+
+**Recovery**:
+- Restore mnemonic from secure backup (paper wallet, password manager, etc.)
+- If no backup exists: **funds are irrecoverable**
+
+<Warning>
+  There is no recovery mechanism for lost mnemonics. Always maintain multiple secure backups of your mnemonic phrase.
+</Warning>
+
+#### Scenario 3: Disk Failure
+
+**Recovery**:
+```bash
+# Replace failed disk
+# Mount new disk at /data
+# Restore from backup
+tar -xzf /backups/core-lane-state-latest.tar.gz -C /
+
+# Restart node
+systemctl start core-lane-node
+
+# Verify sync status
+curl -s http://localhost:8545/health | jq '.latest_block'
+```
+
+### Backup Verification
+
+Regularly test backup restoration:
+
+```bash
+#!/bin/bash
+# test-backup-restore.sh
+
+BACKUP_FILE="/backups/core-lane-state-latest.tar.gz"
+TEST_DIR="/tmp/core-lane-restore-test"
+
+mkdir -p "$TEST_DIR"
+tar -xzf "$BACKUP_FILE" -C "$TEST_DIR"
+
+# Verify tip file exists and is valid
+if [ ! -f "$TEST_DIR/data/tip" ]; then
+  echo "ERROR: tip file missing from backup"
+  exit 1
+fi
+
+# Check wallet database
+if ! sqlite3 "$TEST_DIR/data/wallet_mainnet.sqlite3" "PRAGMA integrity_check;" | grep -q "ok"; then
+  echo "ERROR: wallet database corrupted in backup"
+  exit 1
+fi
+
+echo "Backup verification successful"
+rm -rf "$TEST_DIR"
+```
+
+## Best Practices
+
+1. **Automate backups**: Run daily backups to remote storage
+2. **Monitor disk space**: Set alerts at 80% usage
+3. **Test restores**: Verify backups monthly
+4. **Keep mnemonics secure**: Use encrypted storage, multiple copies
+5. **Update regularly**: Apply security patches promptly
+6. **Review logs weekly**: Check for errors and warnings
+7. **Monitor performance**: Track block processing times
+8. **Plan for growth**: Provision adequate disk space
+9. **Document changes**: Keep a change log for configuration updates
+10. **Have a runbook**: Document recovery procedures specific to your setup

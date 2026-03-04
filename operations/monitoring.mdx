@@ -1,0 +1,478 @@
+---
+title: Monitoring and Observability
+description: Monitor Core Lane node health, metrics, and performance
+---
+
+## Health Check Endpoint
+
+Core Lane provides a comprehensive health check endpoint for monitoring node status and operational metrics.
+
+### Endpoint
+
+```
+GET /health
+```
+
+### Response Format
+
+```json
+{
+  "status": "ok",
+  "block_count": 150,
+  "latest_block": 149,
+  "last_processed_bitcoin_height": 850000,
+  "total_accounts": 42,
+  "total_transactions": 127,
+  "current_base_fee_wei": 1000000000,
+  "current_base_fee_gwei": 1,
+  "total_burned_wei": 5000000000000000000,
+  "total_burned_eth": "5.000000000",
+  "reorgs_detected": 2,
+  "total_sequencer_payments_wei": 100000000000000000,
+  "total_sequencer_payments_eth": "0.100000000",
+  "last_block_processing_time_ms": 450
+}
+```
+
+## Metrics Reference
+
+### Block Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `block_count` | integer | Total number of blocks stored in state |
+| `latest_block` | integer | Latest Core Lane block number |
+| `last_processed_bitcoin_height` | integer/null | Last processed Bitcoin/anchor block height |
+
+**Usage**: Track chain progression and sync status.
+
+```bash
+# Check latest block
+curl -s http://localhost:8545/health | jq '.latest_block'
+
+# Monitor block processing
+watch -n 5 'curl -s http://localhost:8545/health | jq ".latest_block, .last_processed_bitcoin_height"'
+```
+
+### State Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `total_accounts` | integer | Number of accounts with non-zero balance or nonce |
+| `total_transactions` | integer | Total transaction count across all blocks |
+
+**Usage**: Monitor chain activity and growth.
+
+### Fee Metrics (EIP-1559)
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `current_base_fee_wei` | integer | Current base fee in wei |
+| `current_base_fee_gwei` | integer | Current base fee in gwei (for convenience) |
+| `total_burned_wei` | integer | Cumulative base fees burned (wei) |
+| `total_burned_eth` | string | Cumulative base fees burned (ETH, formatted) |
+
+**Usage**: Monitor fee market dynamics.
+
+```bash
+# Check current base fee
+curl -s http://localhost:8545/health | jq '.current_base_fee_gwei'
+
+# Monitor total burned
+curl -s http://localhost:8545/health | jq '.total_burned_eth'
+```
+
+### Performance Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `last_block_processing_time_ms` | integer/null | Last block processing time in milliseconds |
+| `reorgs_detected` | integer | Total blockchain reorganizations detected |
+| `total_sequencer_payments_wei` | integer | Cumulative priority fees paid to sequencers (wei) |
+| `total_sequencer_payments_eth` | string | Cumulative priority fees (ETH, formatted) |
+
+**Usage**: Track node performance and chain stability.
+
+<Warning>
+  A high `reorgs_detected` count may indicate Bitcoin network instability or an aggressive reorg testing environment. In production, frequent reorgs are abnormal.
+</Warning>
+
+## Logging
+
+### Log Levels
+
+Core Lane uses the Rust `tracing` framework with environment variable configuration:
+
+```bash
+# Production: info level
+RUST_LOG=info core-lane-node start ...
+
+# Debugging: debug level
+RUST_LOG=debug core-lane-node start ...
+
+# Module-specific: debug for core_lane, info for everything else
+RUST_LOG=core_lane=debug,info core-lane-node start ...
+
+# Trace everything (very verbose)
+RUST_LOG=trace core-lane-node start ...
+```
+
+### Log Output
+
+Logs are written to stdout with structured formatting:
+
+```
+2024-01-15T10:30:45.123Z  INFO core_lane: Starting Core Lane block scanner...
+2024-01-15T10:30:45.456Z  INFO core_lane: Connected to Bitcoin node successfully
+2024-01-15T10:30:45.789Z  INFO core_lane: Core Lane state initialized
+2024-01-15T10:30:50.123Z  INFO core_lane: ✅ Finalized Core Lane block 1 with 3 transactions
+2024-01-15T10:30:55.456Z  WARN core_lane: No new Bitcoin blocks to process
+```
+
+### Important Log Messages
+
+**Block Processing**:
+- `🆕 Created Core Lane block N` - New block created
+- `✅ Finalized Core Lane block N with X transactions` - Block finalized successfully
+- `⛽ Block N gas usage: X / Y` - Gas usage information
+- `💾 Wrote state for block N` - State persisted to disk
+
+**Reorgs**:
+- `🔄 Detected Bitcoin reorg` - Blockchain reorganization detected
+- `🔄 Rolling back state to Core Lane block N` - State rollback initiated
+- `✅ Successfully rolled back to Core Lane block N` - Rollback completed
+
+**Errors**:
+- `❌ Failed to deserialize state` - State corruption detected
+- `Failed to write state for block N to disk` - Disk write failure
+- `Error scanning blocks` - Block scanning error
+
+**Wallet**:
+- `✅ Wallet database created successfully` - Wallet initialized
+- `✅ Burn transaction broadcast successfully` - Burn transaction sent
+- `📍 Transaction ID: <txid>` - Transaction identifier
+
+## Monitoring Strategies
+
+### Health Check Monitoring
+
+Configure your monitoring system to poll the `/health` endpoint:
+
+```bash
+#!/bin/bash
+# health-check.sh - Example health check script
+
+HOST="localhost:8545"
+RESPONSE=$(curl -s -w "\n%{http_code}" "http://${HOST}/health")
+HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+BODY=$(echo "$RESPONSE" | head -n-1)
+
+if [ "$HTTP_CODE" != "200" ]; then
+  echo "ERROR: Health check failed with HTTP $HTTP_CODE"
+  exit 1
+fi
+
+STATUS=$(echo "$BODY" | jq -r '.status')
+if [ "$STATUS" != "ok" ]; then
+  echo "ERROR: Node status is $STATUS"
+  exit 1
+fi
+
+echo "OK: Node is healthy"
+echo "$BODY" | jq '.'
+exit 0
+```
+
+### Metrics Collection
+
+**Prometheus-style exporter** (example):
+
+```python
+#!/usr/bin/env python3
+import requests
+import time
+
+def collect_metrics():
+    response = requests.get('http://localhost:8545/health')
+    data = response.json()
+    
+    print(f"# HELP core_lane_blocks_total Total blocks in chain")
+    print(f"# TYPE core_lane_blocks_total counter")
+    print(f"core_lane_blocks_total {data['block_count']}")
+    
+    print(f"# HELP core_lane_latest_block Latest block number")
+    print(f"# TYPE core_lane_latest_block gauge")
+    print(f"core_lane_latest_block {data['latest_block']}")
+    
+    print(f"# HELP core_lane_accounts_total Total accounts")
+    print(f"# TYPE core_lane_accounts_total counter")
+    print(f"core_lane_accounts_total {data['total_accounts']}")
+    
+    print(f"# HELP core_lane_base_fee_gwei Current base fee in gwei")
+    print(f"# TYPE core_lane_base_fee_gwei gauge")
+    print(f"core_lane_base_fee_gwei {data['current_base_fee_gwei']}")
+    
+    if data['last_block_processing_time_ms'] is not None:
+        print(f"# HELP core_lane_block_processing_ms Block processing time")
+        print(f"# TYPE core_lane_block_processing_ms gauge")
+        print(f"core_lane_block_processing_ms {data['last_block_processing_time_ms']}")
+    
+    print(f"# HELP core_lane_reorgs_total Total reorgs detected")
+    print(f"# TYPE core_lane_reorgs_total counter")
+    print(f"core_lane_reorgs_total {data['reorgs_detected']}")
+
+if __name__ == '__main__':
+    collect_metrics()
+```
+
+### Alerting Rules
+
+Recommended alerts:
+
+1. **Node Down**: `/health` endpoint unreachable for >2 minutes
+2. **Block Processing Stalled**: `latest_block` unchanged for >15 minutes
+3. **High Processing Time**: `last_block_processing_time_ms > 5000` (5 seconds)
+4. **Frequent Reorgs**: `reorgs_detected` increasing rapidly (rate > 1/hour in production)
+5. **Bitcoin Sync Behind**: `last_processed_bitcoin_height` > 10 blocks behind Bitcoin tip
+
+### Docker/Fly.io Health Checks
+
+**Fly.io configuration**:
+
+```toml
+[http_service]
+  internal_port = 8545
+  force_https = true
+  
+  [[http_service.checks]]
+    interval = '15s'
+    timeout = '10s'
+    grace_period = '1m0s'
+    method = 'get'
+    path = '/health'
+    protocol = 'http'
+```
+
+**Docker Compose**:
+
+```yaml
+services:
+  core-lane:
+    image: ghcr.io/lanelayer/core-lane/core-lane:latest
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+```
+
+**Kubernetes**:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: core-lane-node
+spec:
+  containers:
+  - name: core-lane
+    image: ghcr.io/lanelayer/core-lane/core-lane:latest
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: 8545
+      initialDelaySeconds: 60
+      periodSeconds: 30
+      timeoutSeconds: 10
+      failureThreshold: 3
+    readinessProbe:
+      httpGet:
+        path: /health
+        port: 8545
+      initialDelaySeconds: 30
+      periodSeconds: 10
+```
+
+## Performance Monitoring
+
+### Block Processing Time
+
+Monitor `last_block_processing_time_ms` to detect performance degradation:
+
+```bash
+# Log processing times
+while true; do
+  TIME=$(curl -s http://localhost:8545/health | jq '.last_block_processing_time_ms')
+  echo "$(date -Iseconds) Block processing: ${TIME}ms"
+  sleep 10
+done
+```
+
+**Expected ranges**:
+- Empty blocks: 50-200ms
+- Blocks with transactions: 200-1000ms
+- Large blocks (>100 tx): 1000-3000ms
+
+<Warning>
+  If `last_block_processing_time_ms` consistently exceeds 5000ms (5 seconds), investigate disk I/O performance, CPU utilization, or transaction complexity.
+</Warning>
+
+### Resource Utilization
+
+**Disk Usage**:
+
+```bash
+# Check data directory size
+du -sh /data
+
+# Check individual directories
+du -sh /data/blocks /data/metastate /data/deltas /data/chain_index
+```
+
+**Memory Usage**:
+
+```bash
+# Monitor process memory (Linux)
+ps aux | grep core-lane-node
+
+# Docker stats
+docker stats core-lane-node
+```
+
+**Expected resource usage**:
+- Memory: 512MB - 2GB (depends on chain size)
+- Disk I/O: 1-10 MB/s during sync
+- CPU: 10-50% (single core) during block processing
+
+## Troubleshooting with Logs
+
+### Enable Debug Logging
+
+```bash
+# Restart with debug logging
+RUST_LOG=debug core-lane-node start ...
+
+# Or use module-specific debug
+RUST_LOG=core_lane::rpc=debug,core_lane::transaction=debug,info core-lane-node start ...
+```
+
+### Common Log Patterns
+
+**Slow block processing**:
+```
+grep "Block.*processing time" core-lane.log | tail -20
+```
+
+**Failed transactions**:
+```
+grep -i "error" core-lane.log | grep -i "transaction"
+```
+
+**Reorg events**:
+```
+grep -i "reorg" core-lane.log
+```
+
+**State persistence**:
+```
+grep "Wrote.*to disk" core-lane.log | tail -10
+```
+
+### Log Rotation
+
+For production deployments, configure log rotation:
+
+**logrotate configuration** (`/etc/logrotate.d/core-lane`):
+
+```
+/var/log/core-lane/*.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 core-lane core-lane
+    sharedscripts
+    postrotate
+        systemctl reload core-lane > /dev/null 2>&1 || true
+    endscript
+}
+```
+
+## Dashboards
+
+### Example Grafana Dashboard
+
+**Panel 1: Block Height**
+```promql
+core_lane_latest_block
+```
+
+**Panel 2: Block Processing Time**
+```promql
+core_lane_block_processing_ms
+```
+
+**Panel 3: Transaction Rate**
+```promql
+rate(core_lane_transactions_total[5m])
+```
+
+**Panel 4: Base Fee**
+```promql
+core_lane_base_fee_gwei
+```
+
+**Panel 5: Reorgs**
+```promql
+increase(core_lane_reorgs_total[1h])
+```
+
+## Bitcoin RPC Monitoring
+
+Monitor the upstream Bitcoin node connection:
+
+```bash
+# Test Bitcoin RPC connectivity
+curl -s --user bitcoin:password \
+  --data-binary '{"jsonrpc":"1.0","id":"curl","method":"getblockchaininfo","params":[]}' \
+  -H 'content-type: text/plain;' \
+  http://127.0.0.1:18443/ | jq '.result.blocks'
+```
+
+**Key Bitcoin metrics to monitor**:
+- Block height (should be advancing)
+- Connection count (>0)
+- Sync status (verificationprogress = 1.0)
+
+## On-Demand Polling Mode
+
+When `--on-demand-polling` is enabled, trigger block processing manually:
+
+```bash
+# Trigger a single poll
+curl -X POST http://localhost:8545/do_poll
+
+# Monitor status
+curl -s http://localhost:8545/health | jq '.latest_block'
+```
+
+This mode is useful for:
+- Testing and development
+- Controlled block processing
+- Integration with external schedulers
+
+## Best Practices
+
+1. **Monitor the /health endpoint** every 15-30 seconds
+2. **Set up alerts** for node downtime and sync lag
+3. **Track block processing time** to detect performance issues early
+4. **Monitor reorg count** - frequent reorgs indicate problems
+5. **Check disk space** regularly - nodes grow over time
+6. **Use structured logging** and centralize logs for analysis
+7. **Set RUST_LOG=info in production** to balance detail and performance
+8. **Archive old logs** to prevent disk exhaustion
+9. **Monitor Bitcoin RPC health** independently
+10. **Test health checks** before deploying to production

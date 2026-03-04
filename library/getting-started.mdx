@@ -1,0 +1,113 @@
+---
+title: 'Getting Started'
+description: 'Using Core Lane as a library in your Rust applications'
+---
+
+Core Lane can be used as a library to build custom sequencers, transaction processors, and state management tools. The library provides the core functionality for processing transactions, managing state, and interacting with Bitcoin.
+
+## Installation
+
+Add Core Lane to your `Cargo.toml`:
+
+```toml
+[dependencies]
+core-lane = { git = "https://github.com/your-org/core-lane" }
+# Or if published to crates.io:
+# core-lane = "0.1.0"
+
+# Required dependencies for transaction processing
+alloy-primitives = "1.4.0"
+alloy-consensus = { version = "1.0.38", features = ["secp256k1", "serde"] }
+alloy-signer-local = "1.0.38"
+anyhow = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+```
+
+## Basic Usage
+
+The library exports commonly used types and functions:
+
+```rust
+use core_lane::{
+    StateManager, BundleStateManager,
+    execute_transaction, TxEnvelope,
+    create_bitcoin_rpc_client,
+    Address, U256, Bytes, B256
+};
+```
+
+## Key Components
+
+Core Lane's library interface consists of three main components:
+
+### State Management
+
+- **`StateManager`**: Persistent state storage for accounts, transactions, and intents
+- **`BundleStateManager`**: Staging area for batching state changes before committing
+
+### Transaction Execution
+
+- **`execute_transaction()`**: Process Core Lane transactions with full validation
+- **`ProcessingContext`**: Trait for providing execution context (state, Bitcoin client, network)
+
+### Bitcoin Integration
+
+- **`BitcoinRpcClient`**: Type-safe Bitcoin RPC client using corepc
+- **`create_bitcoin_rpc_client()`**: Factory function for creating RPC clients
+
+## Simple Example
+
+Here's a minimal example showing state management:
+
+```rust
+use core_lane::{StateManager, BundleStateManager, Address, U256};
+use anyhow::Result;
+
+fn main() -> Result<()> {
+    // Create a new state manager
+    let state = StateManager::new();
+    let mut bundle = BundleStateManager::new();
+    
+    // Add balance to an account
+    let address = Address::from([0x42; 20]);
+    let amount = U256::from(1_000_000_000_000_000_000u128); // 1 ETH
+    bundle.add_balance(&state, address, amount)?;
+    
+    // Check balance in bundle (not yet committed)
+    assert_eq!(bundle.get_balance(&state, address), amount);
+    assert_eq!(state.get_balance(address), U256::ZERO); // Original unchanged
+    
+    // Commit changes to state
+    let mut new_state = state;
+    new_state.apply_changes(bundle);
+    assert_eq!(new_state.get_balance(address), amount);
+    
+    Ok(())
+}
+```
+
+## Full Example with Bitcoin
+
+For a complete example showing transaction execution with Bitcoin integration, see the `simple_sequencer` example:
+
+```bash
+# From the core-lane repository
+cd workspace/source
+cargo run --example simple_sequencer
+```
+
+This example demonstrates:
+
+- Connecting to a Bitcoin RPC node
+- Creating and managing state
+- Building and signing transactions with Alloy
+- Processing transactions through the execution engine
+- Serializing and deserializing state
+
+See `examples/simple_sequencer.rs` in the repository for the full implementation.
+
+## Next Steps
+
+- [State Manager](/library/state-manager) - Learn about state management and bundle operations
+- [Transaction Execution](/library/transaction-execution) - Process transactions with full validation
+- [Bitcoin Client](/library/bitcoin-client) - Interact with Bitcoin RPC nodes

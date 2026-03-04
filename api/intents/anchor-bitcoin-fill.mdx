@@ -1,0 +1,310 @@
+---
+title: AnchorBitcoinFill Intent
+description: Cross-chain bridge intents for Bitcoin-to-Core Lane value transfer
+---
+
+## Overview
+
+The `AnchorBitcoinFill` intent type (type ID: 1) enables trustless cross-chain value transfer from Bitcoin to Core Lane. Users lock value on Core Lane along with a Bitcoin address and payment requirements. Solvers fulfill the intent by sending Bitcoin to the specified address and proving the payment on-chain.
+
+## Data Structure
+
+The `AnchorBitcoinFill` struct contains all parameters for a Bitcoin fill request:
+
+```rust
+pub struct AnchorBitcoinFill {
+    pub bitcoin_address: Vec<u8>,  // UTF-8 encoded Bitcoin address
+    pub amount: U256,               // Amount to receive in satoshis
+    pub max_fee: U256,              // Maximum acceptable fee in satoshis
+    pub expire_by: u64,             // Unix timestamp when intent expires
+}
+```
+
+### Field Descriptions
+
+- **bitcoin_address**: UTF-8 encoded string of a valid Bitcoin address (any format: P2PKH, P2SH, P2WPKH, P2WSH, P2TR)
+- **amount**: The exact amount of satoshis the user expects to receive
+- **max_fee**: Maximum transaction fee the user is willing to accept (in satoshis)
+- **expire_by**: Unix timestamp after which the intent can no longer be solved
+
+## Creating an AnchorBitcoinFill Intent
+
+### Using the Helper Function
+
+```rust
+use core_lane::intents::create_anchor_bitcoin_fill_intent;
+use alloy_primitives::U256;
+
+let intent_data = create_anchor_bitcoin_fill_intent(
+    "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",  // Bitcoin address
+    U256::from(100_000_000),                          // 1 BTC in satoshis
+    U256::from(50_000),                                // 50,000 sat max fee
+    1735689600,                                        // Jan 1, 2025
+)?;
+
+// Serialize to CBOR
+let cbor_bytes = intent_data.to_cbor()?;
+```
+
+### Manual Construction
+
+```rust
+use core_lane::intents::{AnchorBitcoinFill, IntentData, IntentType};
+use alloy_primitives::U256;
+
+// Create the fill data
+let fill = AnchorBitcoinFill::from_bitcoin_address(
+    "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
+    U256::from(100_000_000),
+    U256::from(50_000),
+    1735689600,
+)?;
+
+// Serialize to CBOR
+let fill_cbor = fill.to_cbor()?;
+
+// Wrap in IntentData
+let intent_data = IntentData {
+    intent_type: IntentType::AnchorBitcoinFill,
+    data: fill_cbor,
+};
+
+let cbor_bytes = intent_data.to_cbor()?;
+```
+
+## Submitting the Intent
+
+### Direct Submission
+
+```solidity
+// Submit with locked value
+bytes memory intentData = hex"...";  // CBOR-encoded IntentData
+uint256 nonce = 0;  // User's current nonce
+
+bytes32 intentId = intentSystem.intent{value: 1 ether}(intentData, nonce);
+```
+
+The locked value (1 ETH in this example) is what the solver will receive when they successfully fulfill the Bitcoin payment.
+
+### Via Blob Storage (for large data)
+
+```solidity
+// First store the intent data as a blob
+bytes memory intentData = hex"...";
+intentSystem.storeBlob{value: storageFee}(intentData, expiryTime);
+
+// Calculate blob hash
+bytes32 blobHash = keccak256(intentData);
+
+// Submit intent referencing the blob
+bytes memory extraData = "";
+bytes32 intentId = intentSystem.intentFromBlob{value: 1 ether}(
+    blobHash,
+    nonce,
+    extraData
+);
+```
+
+## Bitcoin Address Validation
+
+The system validates Bitcoin addresses when parsing:
+
+```rust
+use core_lane::intents::AnchorBitcoinFill;
+use bitcoin::Address as BitcoinAddress;
+use std::str::FromStr;
+
+let fill_data = intent_data.parse_anchor_bitcoin_fill()?;
+
+// Parse and validate the Bitcoin address
+let address_str = fill_data.parse_bitcoin_address()?;
+let bitcoin_addr = BitcoinAddress::from_str(&address_str)?;
+
+println!("Valid Bitcoin address: {}", address_str);
+```
+
+## Solving the Intent
+
+Solvers fulfill AnchorBitcoinFill intents by:
+
+1. **Locking** the intent to prevent other solvers from claiming it
+2. **Sending Bitcoin** to the specified address
+3. **Submitting proof** of the Bitcoin transaction
+
+### Step 1: Lock the Intent
+
+```solidity
+bytes memory lockData = "";  // No additional data needed
+intentSystem.lockIntentForSolving(intentId, lockData);
+```
+
+### Step 2: Send Bitcoin
+
+The solver sends Bitcoin to the address specified in the intent, ensuring:
+- Amount matches or exceeds the requested amount
+- Transaction fee is within the max_fee limit
+- Transaction is confirmed on Bitcoin L1
+
+### Step 3: Submit Proof
+
+The solver submits proof data containing the Bitcoin block number and transaction ID:
+
+```solidity
+// Proof format: block_number (8 bytes LE) + txid (32 bytes)
+bytes memory proofData = abi.encodePacked(
+    uint64(850000),    // Bitcoin block number (little-endian)
+    txid               // 32-byte transaction ID
+);
+
+intentSystem.solveIntent(intentId, proofData);
+```
+
+### Proof Data Format
+
+The proof data is exactly 40 bytes:
+
+| Offset | Length | Description |
+|--------|--------|-------------|
+| 0      | 8      | Block number (u64 little-endian) |
+| 8      | 32     | Transaction ID (txid) |
+
+```rust
+// Parsing proof data (from transaction.rs:806-809)
+let block_number = u64::from_le_bytes(
+    data[..8].try_into().expect("data must be at least 8 bytes")
+);
+let txid_bytes: [u8; 32] = data[8..40].try_into().expect("txid must be 32 bytes");
+```
+
+## L1 Verification
+
+When `solveIntent()` is called with AnchorBitcoinFill proof data, Core Lane:
+
+1. Verifies the intent is in `Locked` status
+2. Extracts the block number and txid from proof data
+3. Queries the Bitcoin RPC client to fetch the block and transaction
+4. Validates that the transaction:
+   - Sends the correct amount to the correct address
+   - Has fees within the max_fee limit
+   - Is confirmed in the specified block
+5. Transfers the locked value to the solver
+6. Marks the intent as `Solved`
+
+```rust
+// Verification logic (from transaction.rs:849-895)
+match cbor_intent.intent_type {
+    IntentType::AnchorBitcoinFill => {
+        match verify_intent_fill_on_bitcoin(
+            state,
+            intent_id,
+            block_number,
+            txid_bytes,
+        ) {
+            Ok(true) => {
+                // Transfer locked value to solver
+                bundle_state.add_balance(
+                    state.state_manager(),
+                    sender,
+                    U256::from(intent_value),
+                )?;
+                // Mark as solved
+                intent.status = IntentStatus::Solved;
+            }
+            Ok(false) => {
+                // L1 fill not found
+            }
+            Err(e) => {
+                // Verification error
+            }
+        }
+    }
+}
+```
+
+## Cancellation
+
+The intent creator can cancel an AnchorBitcoinFill intent if:
+- The intent has not been solved
+- The cancellation is called by the creator
+
+```solidity
+bytes memory cancelData = "";
+intentSystem.cancelIntent(intentId, cancelData);
+```
+
+Upon cancellation:
+- The intent status changes to `Cancelled`
+- The locked value is returned to the creator
+- The intent can no longer be solved
+
+## Parsing Intent Data
+
+To parse an AnchorBitcoinFill intent from CBOR:
+
+```rust
+use core_lane::intents::IntentData;
+
+// Deserialize the IntentData wrapper
+let intent_data = IntentData::from_cbor(&cbor_bytes)?;
+
+// Parse the AnchorBitcoinFill data
+let fill_data = intent_data.parse_anchor_bitcoin_fill()?;
+
+println!("Bitcoin address: {:?}", String::from_utf8(fill_data.bitcoin_address));
+println!("Amount: {} sats", fill_data.amount);
+println!("Max fee: {} sats", fill_data.max_fee);
+println!("Expires at: {}", fill_data.expire_by);
+```
+
+## Example: Complete Flow
+
+```rust
+use core_lane::intents::create_anchor_bitcoin_fill_intent;
+use alloy_primitives::U256;
+
+// 1. User creates intent
+let intent_data = create_anchor_bitcoin_fill_intent(
+    "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
+    U256::from(50_000_000),  // 0.5 BTC
+    U256::from(25_000),       // 25k sat fee
+    1735689600,
+)?;
+
+let cbor = intent_data.to_cbor()?;
+
+// 2. Submit on-chain (via Solidity/ethers.js)
+// intentId = intentSystem.intent{value: 0.5 ether}(cbor, nonce);
+
+// 3. Solver locks the intent
+// intentSystem.lockIntentForSolving(intentId, "");
+
+// 4. Solver sends Bitcoin transaction
+// (external Bitcoin transaction)
+
+// 5. Solver submits proof
+// let proof = encode_proof(850000, txid);
+// intentSystem.solveIntent(intentId, proof);
+
+// 6. Core Lane verifies and pays solver
+// Solver receives 0.5 ETH
+```
+
+## Error Handling
+
+Common errors when working with AnchorBitcoinFill intents:
+
+| Error | Cause |
+|-------|-------|
+| "Expected AnchorBitcoinFill intent type" | Wrong intent type in IntentData |
+| "Failed to parse AnchorBitcoinFill from CBOR" | Malformed CBOR data |
+| "Invalid UTF-8 in bitcoin_address" | Bitcoin address not valid UTF-8 |
+| "Invalid Bitcoin address" | Address fails Bitcoin validation |
+| "L1 fill not found in block" | Transaction not in specified block |
+| "Value too large (exceeds u64::MAX)" | Locked value > ~18.4 ETH |
+| "Already locked" | Intent already locked by another solver |
+| "Already solved" | Intent already fulfilled |
+
+## Next Steps
+
+- [Intent System Overview](/api/intents/overview) - Core concepts and lifecycle
+- [RISC-V Program Intents](/api/intents/risc-v-programs) - Programmable intent validation

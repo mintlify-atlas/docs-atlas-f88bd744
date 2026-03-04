@@ -1,80 +1,458 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart Guide
+description: Get your Core Lane node running in minutes with this step-by-step guide
 ---
 
-## Get started in three steps
+## Overview
 
-Get your documentation site running locally and make your first customization.
-
-### Step 1: Set up your local environment
-
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+This guide will walk you through setting up a Core Lane node on Bitcoin regtest for local development and testing. You'll have a fully functional node running in under 10 minutes.
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  This quickstart uses Bitcoin **regtest** for local development. For testnet or mainnet setup, see [Running a Node](/setup/running-a-node).
 </Note>
+
+## Prerequisites
+
+Before starting, ensure you have:
+
+<CardGroup cols={2}>
+  <Card title="Rust & Cargo" icon="rust">
+    Install via [rustup](https://rustup.rs/): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+  </Card>
+  
+  <Card title="Docker" icon="docker">
+    Required for running Bitcoin regtest. Install from [docker.com](https://www.docker.com/)
+  </Card>
+  
+  <Card title="Git" icon="git">
+    To clone the repository
+  </Card>
+  
+  <Card title="8GB+ RAM" icon="memory">
+    Recommended for building and running
+  </Card>
+</CardGroup>
+
+## Installation
+
+<Steps>
+  <Step title="Clone the repository">
+    Clone the Core Lane repository from GitHub:
+    
+    ```bash
+    git clone https://github.com/lanelayer/core-lane
+    cd core-lane
+    ```
+  </Step>
+  
+  <Step title="Build the node">
+    Build the Core Lane node binary using Cargo:
+    
+    ```bash
+    cargo build --release
+    ```
+    
+    This will compile the `core-lane-node` binary to `target/release/core-lane-node`.
+    
+    <Note>
+      The first build may take 5-10 minutes as Cargo downloads and compiles dependencies. Subsequent builds are much faster.
+    </Note>
+    
+    <Accordion title="Build for development (faster compilation)">
+      For faster compilation during development, use debug mode:
+      
+      ```bash
+      cargo build
+      ```
+      
+      The binary will be at `target/debug/core-lane-node`. Debug builds compile faster but run slower.
+    </Accordion>
+  </Step>
+  
+  <Step title="Verify installation">
+    Verify the build succeeded:
+    
+    ```bash
+    ./target/release/core-lane-node --help
+    ```
+    
+    You should see the Core Lane command-line interface help output.
+  </Step>
+</Steps>
+
+## Start Development Environment
+
+The easiest way to get started is using the provided development environment script:
+
+<Steps>
+  <Step title="Start the environment">
+    Use the Makefile command to start the complete development stack:
+    
+    ```bash
+    make dev-start
+    ```
+    
+    This script will:
+    - Start a Bitcoin regtest Docker container
+    - Create a BDK wallet with a new mnemonic
+    - Mine initial blocks to fund the wallet
+    - Start the Core Lane node
+    - Begin automatic block mining
+    
+    <Accordion title="What's happening behind the scenes?">
+      The `dev-start` command runs `scripts/dev-environment.sh`, which:
+      
+      1. **Starts Bitcoin Core 30.0** in regtest mode on port 18443
+      2. **Creates a BDK wallet** and saves the mnemonic to `.dev-wallets/mnemonic_regtest.txt`
+      3. **Mines 111 blocks** to the wallet address (101 for coinbase maturity + 10 buffer)
+      4. **Launches the Core Lane node** with JSON-RPC on port 8546
+      5. **Starts a mining loop** that creates new blocks every 10 seconds
+    </Accordion>
+  </Step>
+  
+  <Step title="Check status">
+    Verify everything is running:
+    
+    ```bash
+    make dev-status
+    ```
+    
+    You should see:
+    - Bitcoin container status
+    - Block height
+    - Core Lane node status
+    - Wallet balance
+  </Step>
+  
+  <Step title="Access the node">
+    Your Core Lane node is now running with a JSON-RPC server at:
+    
+    ```
+    http://127.0.0.1:8546
+    ```
+    
+    Test it with a simple balance query:
+    
+    ```bash
+    curl -X POST http://127.0.0.1:8546 \
+      -H "Content-Type: application/json" \
+      -d '{
+        "jsonrpc": "2.0",
+        "method": "eth_getBalance",
+        "params": ["0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", "latest"],
+        "id": 1
+      }'
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  The development environment saves your wallet mnemonic to `.dev-wallets/mnemonic_regtest.txt`. Keep this file secure and never commit it to version control.
+</Note>
+
+## Manual Setup (Alternative)
+
+If you prefer to set up components manually:
+
+<Steps>
+  <Step title="Start Bitcoin regtest">
+    Start a Bitcoin regtest node using Docker:
+    
+    ```bash
+    docker run --rm -d --name bitcoin-regtest \
+      -p 18443:18443 -p 18444:18444 \
+      -v $HOME/bitcoin-regtest:/bitcoin/.bitcoin \
+      bitcoin/bitcoin:30.0 \
+      -regtest \
+      -fallbackfee=0.0002 \
+      -server=1 \
+      -rpcuser=bitcoin \
+      -rpcpassword=bitcoin123 \
+      -rpcallowip=0.0.0.0/0 \
+      -rpcbind=0.0.0.0 \
+      -txindex=1
+    ```
+  </Step>
+  
+  <Step title="Create wallet">
+    Create a new Core Lane wallet:
+    
+    ```bash
+    ./target/release/core-lane-node create-wallet --network regtest
+    ```
+    
+    Save the output mnemonic to a file:
+    
+    ```bash
+    mkdir -p .wallets
+    echo "your mnemonic words here" > .wallets/mnemonic.txt
+    chmod 600 .wallets/mnemonic.txt
+    ```
+  </Step>
+  
+  <Step title="Get wallet address">
+    Get your wallet's Bitcoin address:
+    
+    ```bash
+    ./target/release/core-lane-node get-address \
+      --network regtest \
+      --mnemonic-file .wallets/mnemonic.txt
+    ```
+  </Step>
+  
+  <Step title="Fund the wallet">
+    Mine blocks to your wallet address:
+    
+    ```bash
+    # Mine 101 blocks for coinbase maturity
+    docker exec bitcoin-regtest bitcoin-cli \
+      -regtest -rpcuser=bitcoin -rpcpassword=bitcoin123 \
+      generatetoaddress 101 "YOUR_WALLET_ADDRESS"
+    ```
+  </Step>
+  
+  <Step title="Start Core Lane node">
+    Start the Core Lane node:
+    
+    ```bash
+    ./target/release/core-lane-node start \
+      --bitcoin-rpc-read-url http://127.0.0.1:18443 \
+      --bitcoin-rpc-read-user bitcoin \
+      --bitcoin-rpc-read-password bitcoin123 \
+      --mnemonic-file .wallets/mnemonic.txt \
+      --http-host 127.0.0.1 \
+      --http-port 8545
+    ```
+    
+    <Info>
+      By default, the node scans from Bitcoin block 0. Use `--start-block` to start from a specific block height.
+    </Info>
+  </Step>
+</Steps>
+
+## Try Your First Transaction
+
+Now that your node is running, let's create a burn transaction to bridge Bitcoin to Core Lane:
+
+<Steps>
+  <Step title="Create a burn transaction">
+    Use the `burn` command to send Bitcoin to an unspendable address and mint equivalent balance on Core Lane:
+    
+    ```bash
+    ./target/release/core-lane-node burn \
+      --burn-amount 500000 \
+      --chain-id 1 \
+      --eth-address "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266" \
+      --network regtest \
+      --mnemonic-file .wallets/mnemonic.txt \
+      --rpc-url http://127.0.0.1:18443 \
+      --rpc-user bitcoin \
+      --rpc-password bitcoin123
+    ```
+    
+    This burns 500,000 satoshis (0.005 BTC) and mints the equivalent on Core Lane to the specified Ethereum address.
+  </Step>
+  
+  <Step title="Mine a block">
+    Mine a Bitcoin block to confirm the burn transaction:
+    
+    ```bash
+    docker exec bitcoin-regtest bitcoin-cli \
+      -regtest -rpcuser=bitcoin -rpcpassword=bitcoin123 \
+      generate 1
+    ```
+  </Step>
+  
+  <Step title="Check balance">
+    Query the Core Lane balance:
+    
+    ```bash
+    curl -X POST http://127.0.0.1:8545 \
+      -H "Content-Type: application/json" \
+      -d '{
+        "jsonrpc": "2.0",
+        "method": "eth_getBalance",
+        "params": ["0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", "latest"],
+        "id": 1
+      }'
+    ```
+    
+    You should see a non-zero balance representing the burned Bitcoin.
+  </Step>
+</Steps>
+
+## Available Make Commands
+
+The project includes a comprehensive Makefile with helpful commands:
+
+### Build Commands
+
+```bash
+make build          # Build the Core Lane node
+make clean          # Clean build artifacts
+make check          # Run cargo check
+make fmt            # Format code with rustfmt
+make clippy         # Run clippy linter
+```
+
+### Test Commands
+
+```bash
+make test           # Run all tests (unit + integration)
+make test-unit      # Run unit tests only
+make test-integration  # Run integration tests only
+```
+
+### Development Environment
+
+```bash
+make dev-start      # Start complete dev environment
+make dev-stop       # Stop dev environment
+make dev-status     # Check environment status
+make dev-balances   # Check wallet balances
+```
+
+### Demo Commands
+
+```bash
+make run-burn       # Run a demo burn transaction
+make run-node       # Run the Core Lane node
+```
+
+## Stopping the Environment
+
+When you're done:
+
+```bash
+make dev-stop
+```
+
+This will:
+- Stop the Core Lane node
+- Stop the mining loop
+- Stop the Bitcoin regtest container
+
+<Warning>
+  Stopping the environment will remove the Bitcoin regtest data. Your Core Lane state is preserved in the working directory.
+</Warning>
+
+## Configuration Options
+
+The `core-lane-node start` command supports many configuration options:
+
+<ParamField path="bitcoin-rpc-read-url" type="string" default="http://127.0.0.1:18443">
+  Bitcoin RPC URL for reading blockchain data
+</ParamField>
+
+<ParamField path="bitcoin-rpc-read-user" type="string" default="user">
+  Bitcoin RPC username for read operations
+</ParamField>
+
+<ParamField path="bitcoin-rpc-read-password" type="string" required>
+  Bitcoin RPC password for read operations
+</ParamField>
+
+<ParamField path="mnemonic-file" type="string" required>
+  Path to file containing 12 or 24 word mnemonic phrase
+</ParamField>
+
+<ParamField path="electrum-url" type="string">
+  Electrum server URL (required for mainnet/testnet)
+</ParamField>
+
+<ParamField path="start-block" type="integer">
+  Bitcoin block height to start scanning from
+</ParamField>
+
+<ParamField path="http-host" type="string" default="127.0.0.1">
+  Host for JSON-RPC server
+</ParamField>
+
+<ParamField path="http-port" type="integer" default="8545">
+  Port for JSON-RPC server
+</ParamField>
+
+<ParamField path="sequencer-rpc-url" type="string">
+  Sequencer RPC URL for transaction forwarding
+</ParamField>
+
+<ParamField path="sequencer-address" type="string">
+  Sequencer address for priority fee collection
+</ParamField>
+
+<ParamField path="on-demand-polling" type="boolean">
+  Enable on-demand polling mode (disable automatic block scanning)
+</ParamField>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Build fails with dependency errors">
+    Make sure you have the latest Rust toolchain:
+    
+    ```bash
+    rustup update
+    cargo clean
+    cargo build --release
+    ```
+  </Accordion>
+  
+  <Accordion title="Docker container won't start">
+    Check if Docker is running:
+    
+    ```bash
+    docker info
+    ```
+    
+    Make sure port 18443 is not already in use:
+    
+    ```bash
+    lsof -i :18443
+    ```
+  </Accordion>
+  
+  <Accordion title="Node can't connect to Bitcoin RPC">
+    Verify Bitcoin RPC is accessible:
+    
+    ```bash
+    curl --user bitcoin:bitcoin123 \
+      --data-binary '{"jsonrpc":"1.0","id":"1","method":"getblockchaininfo","params":[]}' \
+      -H 'content-type: text/plain;' \
+      http://127.0.0.1:18443/
+    ```
+  </Accordion>
+  
+  <Accordion title="Wallet creation fails">
+    Make sure the data directory is writable:
+    
+    ```bash
+    chmod 755 .
+    ```
+    
+    Try specifying a custom data directory:
+    
+    ```bash
+    ./target/release/core-lane-node --data-dir ./data create-wallet --network regtest
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture Overview" icon="diagram-project" href="/concepts/architecture">
+    Learn how Core Lane works under the hood
+  </Card>
+  
+  <Card title="JSON-RPC API" icon="code" href="/api/overview">
+    Explore the full API reference
+  </Card>
+  
+  <Card title="Node Configuration" icon="gear" href="/operations/node-configuration">
+    Configure your node for production
+  </Card>
+  
+  <Card title="Intent System" icon="bullseye" href="/concepts/intent-system">
+    Create intent-based transactions
+  </Card>
+</CardGroup>

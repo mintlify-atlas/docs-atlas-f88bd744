@@ -1,0 +1,457 @@
+---
+title: 'Core Lane Specific Methods'
+description: 'Custom JSON-RPC methods unique to Core Lane'
+---
+
+Core Lane provides custom JSON-RPC methods that extend beyond standard Ethereum compatibility to support its unique features.
+
+## Fee and Economics Methods
+
+### eth_baseFeePerGas
+
+Returns the current EIP-1559 base fee per gas.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_baseFeePerGas",
+    "params": [],
+    "id": 1
+  }'
+```
+
+<ResponseField name="result" type="string">
+  Current base fee per gas in wei (hex)
+</ResponseField>
+
+**Example Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": "0x3b9aca00",
+  "id": 1
+}
+```
+
+---
+
+### corelane_sequencerBalance
+
+Returns the balance of the sequencer address (which receives priority fees).
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "corelane_sequencerBalance",
+    "params": [],
+    "id": 1
+  }'
+```
+
+<ResponseField name="result" type="string">
+  Sequencer balance in wei (hex)
+</ResponseField>
+
+**Example Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": "0x1bc16d674ec80000",
+  "id": 1
+}
+```
+
+<Info>
+The sequencer address is configured via the `--sequencer-address` command-line flag. If not specified, it defaults to `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266` (first Hardhat test account).
+</Info>
+
+---
+
+### corelane_totalBurned
+
+Returns the total amount of tokens burned from EIP-1559 base fees.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "corelane_totalBurned",
+    "params": [],
+    "id": 1
+  }'
+```
+
+<ResponseField name="result" type="string">
+  Total burned amount in wei (hex)
+</ResponseField>
+
+**Example Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": "0xde0b6b3a7640000",
+  "id": 1
+}
+```
+
+<Note>
+In Core Lane's EIP-1559 implementation, base fees are burned (removed from circulation) while priority fees go to the sequencer.
+</Note>
+
+---
+
+## Key-Value Store Methods
+
+### corelane_getKV
+
+Retrieves a value from the Core Lane key-value store.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "corelane_getKV",
+    "params": ["my-key"],
+    "id": 1
+  }'
+```
+
+<ParamField path="params[0]" type="string" required>
+  Key to retrieve from the KV store
+</ParamField>
+
+<ResponseField name="result" type="string | null">
+  Stored value as hex-encoded bytes, or `null` if key not found
+</ResponseField>
+
+**Example Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": "0x68656c6c6f",
+  "id": 1
+}
+```
+
+<Info>
+The key-value store is a Core Lane-specific feature that allows applications to store and retrieve arbitrary data on-chain. Values are stored via special transaction calldata and can be queried via this RPC method.
+</Info>
+
+---
+
+## Bitcoin Wallet Methods
+
+### bitcoin_getWalletBalance
+
+Returns the Bitcoin wallet balance for the configured mnemonic.
+
+<Note>
+This method is only available when the node is configured with Bitcoin DA (not in derived or Espresso mode).
+</Note>
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "bitcoin_getWalletBalance",
+    "params": [],
+    "id": 1
+  }'
+```
+
+<ResponseField name="result" type="object">
+  Bitcoin wallet balance information
+  <Expandable title="Balance Object Fields">
+    <ResponseField name="network" type="string">
+      Bitcoin network ("bitcoin", "testnet", "testnet4", "signet", or "regtest")
+    </ResponseField>
+    <ResponseField name="total_sats" type="number">
+      Total balance in satoshis
+    </ResponseField>
+    <ResponseField name="confirmed_sats" type="number">
+      Confirmed balance in satoshis
+    </ResponseField>
+    <ResponseField name="unconfirmed_sats" type="number">
+      Unconfirmed balance in satoshis
+    </ResponseField>
+    <ResponseField name="total_btc" type="string">
+      Total balance in BTC (formatted string)
+    </ResponseField>
+    <ResponseField name="confirmed_btc" type="string">
+      Confirmed balance in BTC (formatted string)
+    </ResponseField>
+    <ResponseField name="unconfirmed_btc" type="string">
+      Unconfirmed balance in BTC (formatted string)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**Example Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "network": "regtest",
+    "total_sats": 500000000,
+    "confirmed_sats": 500000000,
+    "unconfirmed_sats": 0,
+    "total_btc": "5.00000000",
+    "confirmed_btc": "5.00000000",
+    "unconfirmed_btc": "0.00000000"
+  },
+  "id": 1
+}
+```
+
+---
+
+## Intent System Methods
+
+Core Lane supports an intent system through `eth_call`. These calls use specific function selectors and are decoded internally.
+
+### IsIntentSolved
+
+Check if a specific intent has been solved.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [{
+      "to": "0x0000000000000000000000000000000000000045",
+      "data": "0x<encoded_is_intent_solved_call>"
+    }, "latest"],
+    "id": 1
+  }'
+```
+
+<ParamField path="data" type="string" required>
+  Encoded function call with intent ID. The calldata should encode:
+  - Function selector for `isIntentSolved(bytes32)`
+  - Intent ID (32 bytes)
+</ParamField>
+
+<ResponseField name="result" type="string">
+  Returns `0x0000000000000000000000000000000000000000000000000000000000000001` if solved, `0x0000000000000000000000000000000000000000000000000000000000000000` if not
+</ResponseField>
+
+**Example Response (solved):**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": "0x0000000000000000000000000000000000000000000000000000000000000001",
+  "id": 1
+}
+```
+
+---
+
+### ValueStoredInIntent
+
+Retrieve the value stored in a specific intent.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [{
+      "to": "0x0000000000000000000000000000000000000045",
+      "data": "0x<encoded_value_stored_in_intent_call>"
+    }, "latest"],
+    "id": 1
+  }'
+```
+
+<ParamField path="data" type="string" required>
+  Encoded function call with intent ID. The calldata should encode:
+  - Function selector for `valueStoredInIntent(bytes32)`
+  - Intent ID (32 bytes)
+</ParamField>
+
+<ResponseField name="result" type="string">
+  Returns the value stored in the intent as a 32-byte hex-encoded uint256, or zero if intent not found
+</ResponseField>
+
+**Example Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000",
+  "id": 1
+}
+```
+
+---
+
+## REST Endpoints
+
+Core Lane also provides HTTP GET endpoints for specific data access:
+
+### GET /health
+
+Health check endpoint.
+
+```bash
+curl http://127.0.0.1:8545/health
+```
+
+**Response:**
+```json
+{
+  "status": "healthy"
+}
+```
+
+---
+
+### GET /get_raw_block/:block_number
+
+Returns raw block data (BundleStateManager) for a specific block.
+
+```bash
+curl http://127.0.0.1:8545/get_raw_block/123
+```
+
+<ParamField path="block_number" type="integer" required>
+  Block number to retrieve
+</ParamField>
+
+**Response:**
+Binary data (Borsh-serialized BundleStateManager)
+
+---
+
+### GET /get_raw_block_delta/:block_number
+
+Returns the state delta for a specific block.
+
+```bash
+curl http://127.0.0.1:8545/get_raw_block_delta/123
+```
+
+<ParamField path="block_number" type="integer" required>
+  Block number to retrieve delta for
+</ParamField>
+
+**Response:**
+Binary data (Borsh-serialized delta)
+
+---
+
+### GET /get_latest_block
+
+Returns information about the latest block.
+
+```bash
+curl http://127.0.0.1:8545/get_latest_block
+```
+
+**Response:**
+```json
+{
+  "block_number": 123,
+  "block_hash": "0x1234...",
+  "timestamp": 1704067200,
+  "transaction_count": 5
+}
+```
+
+---
+
+### GET /kv/:key
+
+Returns the value for a key from the key-value store.
+
+```bash
+curl http://127.0.0.1:8545/kv/my-key
+```
+
+<ParamField path="key" type="string" required>
+  Key to retrieve
+</ParamField>
+
+**Response:**
+Raw bytes if found, or 404 if not found
+
+---
+
+### GET /bitcoin/wallet/balance
+
+Returns Bitcoin wallet balance information.
+
+```bash
+curl http://127.0.0.1:8545/bitcoin/wallet/balance
+```
+
+**Response:**
+```json
+{
+  "network": "regtest",
+  "total_sats": 500000000,
+  "confirmed_sats": 500000000,
+  "unconfirmed_sats": 0,
+  "total_btc": "5.00000000",
+  "confirmed_btc": "5.00000000",
+  "unconfirmed_btc": "0.00000000"
+}
+```
+
+---
+
+### POST /do_poll
+
+Triggers an on-demand block scan (only available when `--on-demand-polling` is enabled).
+
+```bash
+curl -X POST http://127.0.0.1:8545/do_poll
+```
+
+<Note>
+This endpoint is only active when the node is started with the `--on-demand-polling` flag, which disables automatic block scanning.
+</Note>
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "message": "Poll triggered"
+}
+```
+
+---
+
+## Configuration
+
+These custom methods may require specific node configuration:
+
+<CardGroup cols={2}>
+  <Card title="Bitcoin Methods" icon="bitcoin">
+    Require `--mnemonic` or `--mnemonic-file` and Bitcoin RPC configuration
+  </Card>
+  <Card title="Sequencer Methods" icon="server">
+    Use `--sequencer-address` to configure sequencer (defaults to test address)
+  </Card>
+  <Card title="On-Demand Polling" icon="clock">
+    Enable with `--on-demand-polling` flag
+  </Card>
+  <Card title="Sequencer RPC" icon="forward">
+    Set `--sequencer-rpc-url` to forward transactions
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<Card title="Ethereum-Compatible Methods" icon="ethereum" href="/api/ethereum-compatible">
+  Return to standard Ethereum RPC methods
+</Card>

@@ -1,0 +1,594 @@
+---
+title: State Management
+description: Deep dive into Core Lane's dual-layer state management system
+---
+
+## Overview
+
+Core Lane uses a **two-layer state architecture** that separates persistent state from temporary bundle state, enabling atomic transaction processing with rollback capability.
+
+## State Managers
+
+### StateManager - Persistent State
+
+The canonical state of the system (src/state.rs:86-94):
+
+```rust
+pub struct StateManager {
+    accounts: BTreeMap<Address, CoreLaneAccount>,          // Account balances and nonces
+    stored_blobs: BTreeMap<B256, Vec<u8>>,                // Large data blobs
+    kv_storage: BTreeMap<String, Vec<u8>>,                // Key-value storage
+    intents: BTreeMap<B256, Intent>,                      // Intent marketplace
+    transactions: Vec<StoredTransaction>,                  // Transaction history
+    transaction_receipts: BTreeMap<String, TransactionReceipt>, // Receipts
+}
+```
+
+**Key Characteristics:**
+
+- Immutable during bundle execution
+- Serializable with Borsh for state commitments
+- Updated only after successful bundle application
+- Provides base state for all queries
+
+### BundleStateManager - Temporary State
+
+Accumulates changes during bundle execution (src/state.rs:96-105):
+
+```rust
+pub struct BundleStateManager {
+    pub accounts: BTreeMap<Address, CoreLaneAccount>,      // Modified accounts
+    pub stored_blobs: BTreeMap<B256, Vec<u8>>,            // New blobs
+    pub kv_storage: BTreeMap<String, Vec<u8>>,            // Modified KV pairs
+    pub removed_keys: Vec<String>,                        // Deleted KV keys
+    pub intents: BTreeMap<B256, Intent>,                  // Modified intents
+    pub transactions: Vec<StoredTransaction>,              // New transactions
+    pub transaction_receipts: BTreeMap<String, TransactionReceipt>, // New receipts
+}
+```
+
+**Key Characteristics:**
+
+- Starts empty for each bundle
+- Accumulates all state changes
+- Provides overlay over StateManager
+- Can be discarded on bundle failure
+- Merged into StateManager on success
+
+<Note>
+This pattern ensures **atomicity** - either all transactions in a bundle succeed and state is updated, or the bundle fails and no state changes occur.
+</Note>
+
+## Account Structure
+
+Core Lane accounts track balance and nonce (src/lib.rs:31):
+
+```rust
+pub struct CoreLaneAccount {
+    pub balance: U256,  // Account balance in wei
+    pub nonce: U256,    // Transaction nonce for replay protection
+}
+```
+
+Accounts are created on-demand when first accessed.
+
+## State Access Patterns
+
+### Reading State
+
+Bundle state provides overlay access (src/state.rs:214-227):
+
+```rust
+pub fn get_balance(&self, original: &StateManager, address: Address) -> U256 {
+    // Check bundle state first
+    if let Some(account) = self.accounts.get(&address) {
+        return account.balance;
+    }
+    // Fall back to original state
+    original.get_balance(address)
+}
+
+pub fn get_nonce(&self, original: &StateManager, address: Address) -> U256 {
+    if let Some(account) = self.accounts.get(&address) {
+        return account.nonce;
+    }
+    original.get_nonce(address)
+}
+```
+
+This creates a **two-layer view** where bundle changes shadow persistent state.
+
+### Modifying State
+
+Modifications use copy-on-write (src/state.rs:188-213):
+
+```rust
+pub fn get_account_mut(
+    &mut self,
+    original: &StateManager,
+    address: Address,
+) -> Option<&mut CoreLaneAccount> {
+    // Ensure account exists in bundle before getting mutable reference
+    self.accounts.entry(address).or_insert_with(|| {
+        original
+            .get_account(address)
+            .cloned()
+            .unwrap_or_else(CoreLaneAccount::new)  // Create if doesn't exist
+    });
+    
+    // Now get the mutable reference (account definitely exists)
+    self.accounts.get_mut(&address)
+}
+```
+
+**Copy-on-write ensures:**
+
+1. Original state never modified during execution
+2. Bundle state contains only changed accounts
+3. Rollback is simply discarding the bundle state
+
+### Balance Operations
+
+Balance changes with overflow protection (src/state.rs:228-258):
+
+```rust
+pub fn add_balance(
+    &mut self,
+    original: &StateManager,
+    address: Address,
+    amount: U256,
+) -> Result<()> {
+    let account = self.get_account_mut(original, address);
+    if let Some(account) = account {
+        account.add_balance(amount)?;  // Uses checked_add internally
+    } else {
+        let mut account = CoreLaneAccount::new();
+        account.add_balance(amount)?;
+        self.accounts.insert(address, account);
+    }
+    Ok(())
+}
+
+pub fn sub_balance(
+    &mut self,
+    original: &StateManager,
+    address: Address,
+    amount: U256,
+) -> Result<()> {
+    let account = self.get_account_mut(original, address);
+    if let Some(account) = account {
+        account.sub_balance(amount)?;  // Uses checked_sub, fails on underflow
+    } else {
+        return Err(anyhow::anyhow!("Account not found"));
+    }
+    Ok(())
+}
+```
+
+<Warning>
+Balance underflows cause transaction failure, preventing negative balances.
+</Warning>
+
+### Nonce Management
+
+Nonces increment sequentially (src/state.rs:260-270):
+
+```rust
+pub fn increment_nonce(&mut self, original: &StateManager, address: Address) -> Result<()> {
+    let account = self.get_account_mut(original, address);
+    if let Some(account) = account {
+        account.increment_nonce()?;
+    } else {
+        let mut account = CoreLaneAccount::new();
+        account.increment_nonce()?;
+        self.accounts.insert(address, account);
+    }
+    Ok(())
+}
+```
+
+Nonces start at 0 and increment by 1 for each transaction.
+
+## Blob Storage
+
+Large data blobs stored separately from transactions.
+
+### Storing Blobs
+
+```rust
+pub fn insert_blob(&mut self, blob_hash: B256, data: Vec<u8>) {
+    self.stored_blobs.insert(blob_hash, data);
+}
+
+pub fn contains_blob(&self, original: &StateManager, blob_hash: &B256) -> bool {
+    self.stored_blobs.contains_key(blob_hash) || original.contains_blob(blob_hash)
+}
+```
+
+Blobs are keyed by Keccak256 hash for content-addressed storage.
+
+### Blob Use Cases
+
+- **RISC-V programs** - Store program binaries, reference by hash in intents
+- **Large calldata** - Reduce transaction size by storing data separately
+- **Reusable data** - Share blobs across multiple transactions
+
+<Info>
+Blobs currently have no expiration mechanism. Future versions may add time-based or payment-based expiry.
+</Info>
+
+## Intent Storage
+
+Intents stored with copy-on-write semantics (src/state.rs:140-168):
+
+```rust
+pub fn get_intent_mut(
+    &mut self,
+    original: &StateManager,
+    intent_id: &B256,
+) -> Option<&mut Intent> {
+    // Ensure the intent exists in our bundle before getting a mutable reference
+    if !self.intents.contains_key(intent_id) {
+        if let Some(orig_intent) = original.get_intent(intent_id) {
+            self.intents.insert(*intent_id, orig_intent.clone());
+        } else {
+            return None;
+        }
+    }
+    self.intents.get_mut(intent_id)
+}
+
+pub fn insert_intent(&mut self, intent_id: B256, intent: Intent) {
+    self.intents.insert(intent_id, intent);
+}
+```
+
+See [Intent System](/concepts/intent-system) for intent lifecycle details.
+
+## Key-Value Storage
+
+Generic key-value store for application data.
+
+### KV Operations
+
+```rust
+// Bundle state
+pub fn get_kv(&self, key: &str) -> Option<&Vec<u8>> {
+    self.kv_storage.get(key)
+}
+
+pub fn insert_kv(&mut self, key: String, value: Vec<u8>) {
+    self.kv_storage.insert(key.clone(), value);
+    self.removed_keys.retain(|k| k != &key);  // Un-delete if previously removed
+}
+
+pub fn remove_kv(&mut self, key: &str) -> Option<Vec<u8>> {
+    let removed = self.kv_storage.remove(key);
+    let key_string = key.to_string();
+    if !self.removed_keys.iter().any(|k| k == &key_string) {
+        self.removed_keys.push(key_string);  // Track deletion
+    }
+    removed
+}
+```
+
+**Deletion tracking** ensures removed keys are actually deleted when bundle state is applied to StateManager.
+
+## Transaction History
+
+### StoredTransaction
+
+Transactions stored with metadata (src/state.rs:48-83):
+
+```rust
+pub struct StoredTransaction {
+    pub envelope: TxEnvelope,    // Full transaction envelope
+    pub raw_data: Vec<u8>,       // Raw transaction bytes
+    pub block_number: u64,       // Block height when included
+}
+```
+
+**Borsh Serialization:**
+
+```rust
+impl BorshSerialize for StoredTransaction {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        // Serialize raw_data and block_number
+        // Envelope reconstructed on deserialization from raw_data
+        BorshSerialize::serialize(&self.raw_data, writer)?;
+        BorshSerialize::serialize(&self.block_number, writer)?;
+        Ok(())
+    }
+}
+
+impl BorshDeserialize for StoredTransaction {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let raw_data: Vec<u8> = borsh::BorshDeserialize::deserialize_reader(reader)?;
+        let block_number: u64 = borsh::BorshDeserialize::deserialize_reader(reader)?;
+        
+        // Reconstruct envelope from raw_data
+        let envelope = TxEnvelope::decode(&mut raw_data.as_slice())
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        
+        Ok(StoredTransaction { envelope, raw_data, block_number })
+    }
+}
+```
+
+<Note>
+Transactions are stored with raw bytes to enable deterministic serialization. The envelope is reconstructed on load.
+</Note>
+
+### Transaction Receipts
+
+Receipts track execution results (src/state.rs:31-46):
+
+```rust
+pub struct TransactionReceipt {
+    pub transaction_hash: String,
+    pub block_number: u64,
+    pub transaction_index: u64,
+    pub from: String,
+    pub to: Option<String>,
+    pub cumulative_gas_used: String,
+    pub gas_used: String,
+    pub contract_address: Option<String>,
+    pub logs: Vec<Log>,
+    pub status: String,  // "0x1" for success, "0x0" for failure
+    pub effective_gas_price: String,
+    pub tx_type: String,
+    pub logs_bloom: String,
+}
+```
+
+Receipts stored in both BundleStateManager and StateManager for RPC queries.
+
+## State Application
+
+Apply bundle changes to StateManager (src/state.rs:388-421):
+
+```rust
+pub fn apply_changes(&mut self, bundle_state_manager: BundleStateManager) {
+    // Apply account changes
+    for (address, account) in bundle_state_manager.accounts.into_iter() {
+        tracing::info!("Applying changes for account {}", address);
+        self.set_account(address, account);
+    }
+    
+    // Apply blob storage changes
+    for (blob_hash, data) in bundle_state_manager.stored_blobs.into_iter() {
+        self.insert_blob(blob_hash, data);
+    }
+    
+    // Apply intent changes
+    for (intent_id, intent) in bundle_state_manager.intents.into_iter() {
+        self.insert_intent(intent_id, intent);
+    }
+    
+    // Remove deleted keys
+    for key in bundle_state_manager.removed_keys.into_iter() {
+        self.remove_kv(&key);
+    }
+    
+    // Apply KV storage changes
+    for (key, value) in bundle_state_manager.kv_storage.into_iter() {
+        self.insert_kv(key, value);
+    }
+    
+    // Apply transaction storage
+    for transaction in bundle_state_manager.transactions.into_iter() {
+        self.add_transaction(transaction);
+    }
+    
+    // Apply transaction receipts
+    for (tx_hash, receipt) in bundle_state_manager.transaction_receipts.into_iter() {
+        self.add_receipt(tx_hash, receipt);
+    }
+}
+```
+
+This is the **only** point where StateManager is modified during normal operation.
+
+## State Serialization
+
+Core Lane uses **Borsh** for deterministic state serialization.
+
+### Serialization Methods
+
+```rust
+// StateManager
+pub fn borsh_serialize(&self) -> Result<Vec<u8>> {
+    borsh::to_vec(self)
+        .map_err(|e| anyhow::anyhow!("Failed to borsh serialize StateManager: {}", e))
+}
+
+pub fn borsh_deserialize(bytes: &[u8]) -> Result<Self> {
+    let mut cursor = std::io::Cursor::new(bytes);
+    let result = borsh::BorshDeserialize::deserialize_reader(&mut cursor);
+    let consumed = cursor.position() as usize;
+    
+    match result {
+        Ok(value) => {
+            // Ensure all bytes consumed
+            if consumed != bytes.len() {
+                return Err(anyhow::anyhow!(
+                    "Not all bytes read: state file length {} bytes, consumed {} bytes ({} trailing)",
+                    bytes.len(), consumed, bytes.len().saturating_sub(consumed)
+                ));
+            }
+            Ok(value)
+        }
+        Err(e) => Err(anyhow::anyhow!(
+            "Failed to borsh deserialize StateManager (file length {} bytes, consumed {} bytes before error): {}",
+            bytes.len(), consumed, e
+        )),
+    }
+}
+```
+
+<Warning>
+Deserialization validation ensures no trailing bytes remain, detecting corruption or version mismatches.
+</Warning>
+
+### BundleStateManager Serialization
+
+Similar methods available (src/state.rs:285-306):
+
+```rust
+pub fn borsh_serialize(&self) -> Result<Vec<u8>> {
+    borsh::to_vec(self)
+        .map_err(|e| anyhow::anyhow!("Failed to borsh serialize BundleStateManager: {}", e))
+}
+
+pub fn borsh_deserialize(bytes: &[u8]) -> Result<Self> {
+    borsh::from_slice(bytes)
+        .map_err(|e| anyhow::anyhow!("Failed to borsh deserialize BundleStateManager: {}", e))
+}
+```
+
+## Processing Context
+
+The `ProcessingContext` trait abstracts state access for different execution environments (src/transaction.rs:96-106):
+
+```rust
+pub trait ProcessingContext {
+    fn state_manager(&self) -> &StateManager;
+    fn state_manager_mut(&mut self) -> &mut StateManager;
+    fn bitcoin_client_read(&self) -> Option<Arc<dyn BitcoinRpcReadClient>>;
+    fn bitcoin_network(&self) -> bitcoin::Network;
+    fn handle_cmio_query(
+        &mut self,
+        message: CmioMessage,
+        current_intent_id: Option<B256>,
+    ) -> Option<CmioMessage>;
+}
+```
+
+**Implementations:**
+
+- **`CoreLaneStateForLib`** (src/lib.rs:84-154) - For library usage by external sequencers
+- **Node's CoreLaneState** - For full nodes with block tracking
+
+### Library Usage Example
+
+```rust
+use core_lane::{CoreLaneStateForLib, StateManager, BundleStateManager};
+use core_lane::{execute_transaction, TxEnvelope};
+
+let mut state = CoreLaneStateForLib::new(
+    StateManager::new(),
+    bitcoin_client_read,
+    bitcoin_client_write,
+    bitcoin::Network::Regtest
+);
+
+let mut bundle = BundleStateManager::new();
+
+// Execute transaction
+let result = execute_transaction(
+    &tx_envelope,
+    sender,
+    &mut bundle,
+    &mut state,
+    block_timestamp,
+)?;
+
+if result.success {
+    // Apply bundle to state
+    state.state_manager_mut().apply_changes(bundle);
+}
+```
+
+## State Merkleization (Future)
+
+Current implementation uses flat Borsh serialization. Future versions may add:
+
+- **Merkle trees** for accounts/storage
+- **State commitments** for light clients
+- **Sparse Merkle trees** for efficient proofs
+- **Verkle trees** for reduced proof sizes
+
+## Performance Considerations
+
+### BTreeMap vs HashMap
+
+Core Lane uses `BTreeMap` for deterministic ordering:
+
+- Ensures consistent serialization
+- Enables deterministic state roots
+- Slightly slower than HashMap but acceptable for most use cases
+
+### Copy-on-Write Overhead
+
+Bundle state copies accounts/intents on first modification:
+
+- **Pros**: Simple rollback, no state corruption on failure
+- **Cons**: Memory overhead for large bundles
+- **Mitigation**: Most bundles modify small subset of state
+
+### Serialization Performance
+
+Borsh is chosen for:
+
+- **Speed** - Faster than JSON/CBOR for large states
+- **Determinism** - Consistent serialization across implementations
+- **Compactness** - Smaller than text-based formats
+
+## Testing State Management
+
+From src/lib.rs:166-208:
+
+```rust
+#[test]
+fn test_bundle_state_manager() {
+    let state = StateManager::new();
+    let mut bundle = BundleStateManager::new();
+    
+    let test_addr = Address::from([1u8; 20]);
+    let amount = U256::from(1000);
+    
+    // Add balance in bundle
+    bundle.add_balance(&state, test_addr, amount).unwrap();
+    
+    // Check it's reflected in bundle
+    assert_eq!(bundle.get_balance(&state, test_addr), amount);
+    
+    // Original state should be unchanged
+    assert_eq!(state.get_balance(test_addr), U256::ZERO);
+    
+    // Apply changes
+    let mut new_state = state;
+    new_state.apply_changes(bundle);
+    assert_eq!(new_state.get_balance(test_addr), amount);
+}
+
+#[test]
+fn test_state_serialization() {
+    let mut state = StateManager::new();
+    let test_addr = Address::from([1u8; 20]);
+    let amount = U256::from(1000);
+    
+    // Add balance
+    let mut bundle = BundleStateManager::new();
+    bundle.add_balance(&state, test_addr, amount).unwrap();
+    state.apply_changes(bundle);
+    
+    // Serialize
+    let serialized = state.borsh_serialize().unwrap();
+    
+    // Deserialize
+    let deserialized = StateManager::borsh_deserialize(&serialized).unwrap();
+    assert_eq!(deserialized.get_balance(test_addr), amount);
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Transaction Processing" icon="gears" href="/concepts/transaction-processing">
+    See how state changes during execution
+  </Card>
+  <Card title="Intent System" icon="bolt" href="/concepts/intent-system">
+    Learn about intent state management
+  </Card>
+</CardGroup>

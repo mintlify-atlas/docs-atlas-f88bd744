@@ -1,0 +1,499 @@
+---
+title: Taproot Data Availability
+description: Technical deep dive into Core Lane's Taproot-based data availability mechanism
+---
+
+## Overview
+
+Core Lane\'s Taproot DA system embeds transaction data into Bitcoin blocks using Taproot script paths, providing censorship-resistant data availability backed by Bitcoin\'s security.
+
+## Taproot Basics
+
+Bitcoin\'s Taproot upgrade (BIP 341) enables:
+
+- **Script path spending** - Reveal arbitrary scripts when spending
+- **MAST structure** - Merkle tree of spending conditions
+- **Schnorr signatures** - More efficient signature verification
+- **Privacy** - Script paths hidden until spent
+
+<Info>
+Core Lane uses script path spending to embed data in a Taproot leaf script, revealed when the output is spent.
+</Info>
+
+## TaprootDA Structure
+
+The `TaprootDA` struct manages Bitcoin interactions (src/taproot_da.rs:19-34):
+
+```rust
+pub struct TaprootDA {
+    rpc_client: Arc<v28::Client>,  // Bitcoin Core RPC (corepc)
+    bdk_bitcoind_client: Option<Arc<bdk_bitcoind_rpc::bitcoincore_rpc::Client>>,
+}
+```
+
+**Key Methods:**
+
+- `send_transaction_to_da()` - Publish single transaction to Bitcoin
+- `send_bundle_to_da()` - Publish transaction bundle to Bitcoin
+- `create_taproot_envelope_script()` - Build data envelope script
+- `create_taproot_address_with_info()` - Generate Taproot address with control block
+
+## Envelope Script Construction
+
+### Script Pattern
+
+Data is embedded using this Bitcoin script pattern (src/taproot_da.rs:922-936):
+
+```
+OP_FALSE OP_IF
+  <data_chunk_1>
+  <data_chunk_2>
+  ...
+  <data_chunk_n>
+OP_ENDIF OP_TRUE
+```
+
+**Why this pattern?**
+
+- `OP_FALSE OP_IF` - Conditional branch never executed (data is "dead code")
+- Data chunks - Payload split to respect 520-byte push limit
+- `OP_ENDIF OP_TRUE` - Script evaluates to true, making output spendable
+
+### Implementation
+
+```rust
+fn create_taproot_envelope_script(&self, data: &[u8]) -> Result<ScriptBuf> {
+    let mut script = Builder::new();
+    script = script.push_opcode(OP_FALSE).push_opcode(OP_IF);
+    
+    // Add data in chunks of 520 bytes (Bitcoin script push limit)
+    for chunk in data.chunks(520) {
+        if let Ok(push_bytes) = <&bitcoin::blockdata::script::PushBytes>::try_from(chunk) {
+            script = script.push_slice(push_bytes);
+        }
+    }
+    
+    script = script.push_opcode(OP_ENDIF).push_opcode(OP_TRUE);
+    Ok(script.into_script())
+}
+```
+
+<Note>
+Bitcoin consensus limits push operations to 520 bytes, requiring chunking for larger payloads.
+</Note>
+
+## Taproot Address Generation
+
+Generate Taproot address with embedded data (src/taproot_da.rs:938-967):
+
+```rust
+fn create_taproot_address_with_info(
+    &self,
+    data: &[u8],
+    network: bitcoin::Network,
+) -> Result<(BitcoinAddress, String, Vec<u8>)> {
+    let secp = Secp256k1::new();
+    
+    // Generate random internal key
+    let keypair = Keypair::new(&secp, &mut OsRng);
+    let (xonly, _parity) = bitcoin::secp256k1::XOnlyPublicKey::from_keypair(&keypair);
+    
+    // Create envelope script for the data
+    let envelope_script = self.create_taproot_envelope_script(data)?;
+    
+    // Build Taproot tree with envelope as leaf
+    let spend_info = TaprootBuilder::new()
+        .add_leaf(0, envelope_script.clone())?  // Depth 0 (only leaf)
+        .finalize(&secp, xonly)?;
+    
+    let output_key = spend_info.output_key();
+    let address = BitcoinAddress::p2tr_tweaked(output_key, network);
+    
+    // Get control block for spending
+    let control_block = spend_info
+        .control_block(&(envelope_script.clone(), LeafVersion::TapScript))
+        .ok_or(anyhow!("Failed to get control block"))?;
+    
+    Ok((address, internal_key_hex, control_block_bytes))
+}
+```
+
+### Key Components
+
+1. **Internal Key** - Random key pair, not used for signing (just for Taproot construction)
+2. **Taproot Builder** - Creates MAST with envelope script as single leaf at depth 0
+3. **Output Key** - Tweaked public key committing to the script tree
+4. **Control Block** - Proof needed to spend via script path (contains internal key + parity + merkle path)
+
+## Fee Calculation
+
+### Exact Fee Computation
+
+Core Lane calculates exact fees by building a temporary transaction (src/taproot_da.rs:36-94):
+
+```rust
+fn calculate_exact_reveal_fee(
+    &self,
+    envelope_script: &ScriptBuf,
+    control_block: &[u8],
+    sat_per_vb: u64,
+    available_amount: u64,
+) -> Result<u64> {
+    // Create temporary reveal transaction
+    let temp_reveal_tx = self.create_temp_reveal_transaction(
+        envelope_script, 
+        control_block
+    )?;
+    
+    // Calculate exact vBytes using Bitcoin Core's weight calculation
+    let exact_tx_size_vb = self.calculate_actual_tx_size_vb(&temp_reveal_hex)?;
+    
+    let mut reveal_fee = sat_per_vb * exact_tx_size_vb;
+    
+    // Enforce minimum relay fee (16 sats for Bitcoin Core 30.0)
+    const MIN_RELAY_FEE_SATS: u64 = 16;
+    if reveal_fee < MIN_RELAY_FEE_SATS {
+        let adjusted_sat_per_vb = MIN_RELAY_FEE_SATS.div_ceil(exact_tx_size_vb);
+        reveal_fee = adjusted_sat_per_vb * exact_tx_size_vb;
+    }
+    
+    // Cap to available amount
+    if reveal_fee > available_amount {
+        reveal_fee = available_amount;
+    }
+    
+    Ok(reveal_fee)
+}
+```
+
+### Virtual Bytes (vB) Calculation
+
+Using BIP-141 weight units (src/taproot_da.rs:134-153):
+
+```rust
+fn calculate_actual_tx_size_vb(&self, raw_tx_hex: &str) -> Result<u64> {
+    let tx_bytes = hex::decode(raw_tx_hex)?;
+    let tx: bitcoin::Transaction = bitcoin::consensus::deserialize(&tx_bytes)?;
+    
+    // Use rust-bitcoin's battle-tested weight calculation
+    let weight = tx.weight();
+    let vsize = weight.to_wu().div_ceil(4);  // vBytes = weight / 4 (rounded up)
+    
+    Ok(vsize)
+}
+```
+
+**Weight Formula** (BIP-141):
+```
+weight = (base_size * 3) + total_size
+vBytes = weight / 4
+```
+
+<Info>
+Taproot inputs have witness data, so the transaction weight is higher than legacy transactions but benefits from witness discount.
+</Info>
+
+## Wallet Management
+
+Core Lane uses BDK (Bitcoin Dev Kit) for wallet operations.
+
+### Wallet Loading
+
+```rust
+let xkey: ExtendedKey = mnemonic.into_extended_key()?;
+let xprv = xkey.into_xprv(network)?;
+
+let external_descriptor = format!("wpkh({}/0/*)", xprv);
+let internal_descriptor = format!("wpkh({}/1/*)", xprv);
+
+let wallet_path = Path::new(data_dir)
+    .join(format!("wallet_{}.sqlite3", network_str));
+let mut conn = Connection::open(&wallet_path)?;
+
+let wallet_opt = Wallet::load()
+    .descriptor(KeychainKind::External, Some(external_descriptor.clone()))
+    .descriptor(KeychainKind::Internal, Some(internal_descriptor.clone()))
+    .extract_keys()  // Extract private keys for signing
+    .check_network(network)
+    .load_wallet(&mut conn)?;
+```
+
+### Wallet Sync
+
+**Regtest** (src/taproot_da.rs:312-330):
+
+```rust
+use bdk_bitcoind_rpc::Emitter;
+let mut emitter = Emitter::new(
+    bdk_client.as_ref(),
+    wallet.latest_checkpoint().clone(),
+    0,
+    std::iter::empty::<Arc<Transaction>>(),
+);
+
+while let Some(block_emission) = emitter.next_block()? {
+    wallet.apply_block(&block_emission.block, block_emission.block_height())?;
+}
+wallet.persist(&mut conn)?;
+```
+
+**Other Networks** (src/taproot_da.rs:331-350):
+
+```rust
+use bdk_electrum::{electrum_client, BdkElectrumClient};
+
+let electrum_client = electrum_client::Client::new(electrum_url)?;
+let electrum = BdkElectrumClient::new(electrum_client);
+
+// Soft sync: only syncs revealed addresses (not full chain scan)
+let request = wallet.start_sync_with_revealed_spks().build();
+let response = electrum.sync(request, 5, false)?;
+
+wallet.apply_update(response)?;
+wallet.persist(&mut conn)?;
+```
+
+## Commit Transaction Construction
+
+BDK builds and signs the commit transaction (src/taproot_da.rs:413-457):
+
+```rust
+let mut tx_builder = wallet.build_tx();
+
+// Set fee rate
+let fee_rate = FeeRate::from_sat_per_vb(sat_per_vb).expect("valid fee rate");
+tx_builder.fee_rate(fee_rate);
+
+// Add Taproot output with calculated amount
+tx_builder.add_recipient(
+    taproot_address.script_pubkey(),
+    Amount::from_sat(min_taproot_output),
+);
+
+// Build PSBT
+let mut psbt = tx_builder.finish()?;
+
+// Sign with wallet keys
+#[allow(deprecated)]
+let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
+
+// Finalize if needed
+if !finalized {
+    use bdk_wallet::miniscript::psbt::PsbtExt;
+    psbt.finalize_mut(&Secp256k1::new())?;
+}
+
+// Extract final transaction
+let commit_tx = psbt.extract_tx()?;
+let commit_tx_hex = hex::encode(bitcoin::consensus::serialize(&commit_tx));
+```
+
+### Taproot Output Amount
+
+The Taproot output amount must cover the reveal transaction fee (src/taproot_da.rs:390-403):
+
+```rust
+const DUST_THRESHOLD: u64 = 330;  // Bitcoin dust limit for Taproot
+
+let exact_reveal_fee = self.calculate_exact_reveal_fee(
+    &envelope_script,
+    &control_block,
+    sat_per_vb,
+    u64::MAX,
+)?;
+
+// Ensure output meets both reveal fee and dust threshold
+let min_taproot_output = exact_reveal_fee.max(DUST_THRESHOLD);
+```
+
+<Warning>
+Taproot outputs below 330 sats are considered dust and will be rejected by Bitcoin nodes.
+</Warning>
+
+## Reveal Transaction Construction
+
+Immediately spend the Taproot output to reveal data (src/taproot_da.rs:522-545):
+
+```rust
+// OP_RETURN output with marker
+let op_return_data = b"CORELANE";
+let op_return_script = Builder::new()
+    .push_opcode(bitcoin::blockdata::opcodes::all::OP_RETURN)
+    .push_slice(op_return_data)
+    .into_script();
+
+let mut reveal_tx = Transaction {
+    version: bitcoin::transaction::Version::TWO,
+    lock_time: bitcoin::absolute::LockTime::ZERO,
+    input: vec![bitcoin::TxIn {
+        previous_output: bitcoin::OutPoint {
+            txid: commit_txid,
+            vout: taproot_vout_index as u32,
+        },
+        script_sig: ScriptBuf::new(),  // Empty for Taproot
+        sequence: bitcoin::Sequence::MAX,
+        witness: Witness::new(),
+    }],
+    output: vec![bitcoin::TxOut {
+        value: bitcoin::Amount::from_sat(0),  // Zero-value OP_RETURN
+        script_pubkey: op_return_script,
+    }],
+};
+
+// Add witness to reveal the envelope
+let mut witness = Witness::new();
+witness.push(envelope_script.as_bytes());  // The data envelope script
+witness.push(&control_block);              // Control block proves script path
+reveal_tx.input[0].witness = witness;
+```
+
+### Witness Stack
+
+For Taproot script path spending:
+
+```
+[script] [control_block]
+```
+
+- **Script** - The full envelope script being revealed
+- **Control block** - Proof containing internal key + merkle path (if any)
+
+## Package Submission
+
+Submit both transactions atomically (src/taproot_da.rs:548-603):
+
+```rust
+let package_txs = vec![
+    serde_json::json!(commit_tx_hex),
+    serde_json::json!(reveal_final_hex),
+];
+
+let package_result: Result<serde_json::Value, _> = self.rpc_client
+    .call("submitpackage", &[serde_json::json!(package_txs)])
+    .map_err(|e| anyhow!(e).context("submitpackage RPC call failed"));
+
+match package_result {
+    Ok(result) => {
+        let commit_txid = commit_tx.compute_txid();
+        let reveal_txid = reveal_tx.compute_txid();
+        
+        info!("Commit transaction ID (txid): {}", commit_txid);
+        info!("Reveal transaction ID (txid): {}", reveal_txid);
+        info!("Data embedded AND revealed atomically in the same block");
+        
+        Ok(commit_txid.to_string())
+    }
+    Err(e) => Err(anyhow!("Failed to submit transaction package: {}", e))
+}
+```
+
+<Info>
+**Package Relay** (BIP 331) ensures both transactions are accepted or rejected together, preventing the commit from being mined without the reveal.
+</Info>
+
+## Bundle Publishing
+
+Publishing transaction bundles follows the same flow with CBOR encoding (src/taproot_da.rs:607-919):
+
+### Bundle Creation
+
+```rust
+let transactions: Vec<Vec<u8>> = raw_tx_hex_vec
+    .iter()
+    .map(|tx_hex| hex::decode(tx_hex.trim_start_matches("0x")))
+    .collect::<Result<Vec<_>>>()?;
+
+let mut bundle = CoreLaneBundleCbor::new_with_sequencer(
+    transactions, 
+    sequencer_payment_recipient
+);
+bundle.marker = marker;  // Head or Standard
+
+let bundle_cbor = bundle.to_cbor()?;  // Brotli compressed
+
+let mut payload = Vec::new();
+payload.extend_from_slice(b"CORE_BNDL");
+payload.extend_from_slice(&bundle_cbor);
+```
+
+The rest of the flow (Taproot address generation, commit/reveal construction, package submission) is identical to single transaction publishing.
+
+## Data Retrieval
+
+See [Bitcoin Anchoring](/concepts/bitcoin-anchoring#data-extraction) for block scanning and envelope extraction details.
+
+## Security Considerations
+
+### Decompression Bomb Protection
+
+Limited to 128 MB decompressed (src/block.rs:12-14, 219-225):
+
+```rust
+const MAX_DECOMPRESSED_SIZE: u32 = 128 * 1024 * 1024;
+
+if decompressed_length > MAX_DECOMPRESSED_SIZE {
+    return Err(anyhow!(
+        "Decompressed length {} exceeds maximum of {} bytes (128MB)",
+        decompressed_length, MAX_DECOMPRESSED_SIZE
+    ));
+}
+```
+
+### Transaction Validation
+
+All transactions extracted from Bitcoin are validated:
+
+1. **Signature verification** - via `alloy_consensus::TxEnvelope::recover_signer()`
+2. **Nonce checking** - prevents replay attacks
+3. **CBOR validation** - malformed bundles rejected
+4. **Decompression limits** - prevents resource exhaustion
+
+## Performance Optimizations
+
+### Fee Rate Capping
+
+Fees capped between min relay and 50 sat/vB (src/taproot_da.rs:201-207):
+
+```rust
+let capped_sat_per_vb = sat_per_vb
+    .max(min_relay_fee_sat_vb)
+    .min(50);  // Cap at 50 sat/vB max
+
+let final_sat_per_vb = capped_sat_per_vb.clamp(1, 10);  // Force 1-10 for testing
+```
+
+### Brotli Compression
+
+Quality 6, window size 22 (4MB) for balanced compression/speed (src/block.rs:428-439):
+
+```rust
+let params = brotli::enc::BrotliEncoderParams {
+    quality: 6,
+    lgwin: 22,
+    ..Default::default()
+};
+```
+
+### Zero-Copy Extraction
+
+Witness data accessed without copying (src/bitcoin_block.rs:269-271):
+
+```rust
+if let Some(leaf_script) = input.witness.taproot_leaf_script() {
+    // leaf_script.script is a reference to witness data (zero-copy)
+    if let Some(data) = extract_envelope_data_with_prefix(leaf_script.script, prefix) {
+        return Some(data);
+    }
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Bitcoin Anchoring" icon="anchor" href="/concepts/bitcoin-anchoring">
+    See the full anchoring process
+  </Card>
+  <Card title="State Management" icon="database" href="/concepts/state-management">
+    Learn how state is managed
+  </Card>
+</CardGroup>

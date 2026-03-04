@@ -1,0 +1,356 @@
+---
+title: "Bitcoin RPC Client"
+description: "Bitcoin RPC client interface for blockchain interaction"
+---
+
+## Overview
+
+The Bitcoin RPC client provides an abstraction layer for interacting with Bitcoin nodes. It supports both HTTP and HTTPS connections using the `corepc-client` library.
+
+## Client Types
+
+### BitcoinRpcClient
+
+Main Bitcoin RPC client type (corepc v28 client).
+
+**Location:** `src/bitcoin_rpc_client.rs:233`
+
+```rust
+pub type BitcoinRpcClient = v28::Client;
+```
+
+This type is used for both read and write operations.
+
+### BitcoinRpcReadClient
+
+Trait defining read-only Bitcoin RPC operations.
+
+**Location:** `src/bitcoin_rpc_client.rs:24`
+
+```rust
+pub trait BitcoinRpcReadClient: Send + Sync {
+    fn get_block_count(&self) -> Result<u64>;
+    fn get_block_hash(&self, height: u64) -> Result<BlockHash>;
+    fn get_block_hash_hex(&self, height: u64) -> Result<String>;
+    fn get_block(&self, hash: &BlockHash) -> Result<Block>;
+    fn get_block_by_hash_hex(&self, hash_hex: &str) -> Result<Block>;
+    fn getblockchaininfo(&self) -> Result<Value>;
+    fn get_raw_transaction_info(
+        &self,
+        txid: &Txid,
+        block_hash: Option<&BlockHash>,
+    ) -> Result<RawTransactionInfo>;
+}
+```
+
+## Client Creation
+
+### create_bitcoin_rpc_client
+
+Creates a Bitcoin RPC client for read and write operations.
+
+**Location:** `src/bitcoin_rpc_client.rs:236`
+
+```rust
+pub fn create_bitcoin_rpc_client(
+    url: &str,
+    user: &str,
+    password: &str,
+) -> Result<Arc<BitcoinRpcClient>>
+```
+
+<ParamField path="url" type="&str">
+  Bitcoin RPC URL (e.g., "http://127.0.0.1:18443" or "https://node.example.com")
+</ParamField>
+
+<ParamField path="user" type="&str">
+  RPC username
+</ParamField>
+
+<ParamField path="password" type="&str">
+  RPC password
+</ParamField>
+
+**Returns:** `Arc<BitcoinRpcClient>` wrapped in Result
+
+### create_bitcoin_read_client
+
+Creates a read-only Bitcoin RPC client.
+
+**Location:** `src/bitcoin_rpc_client.rs:247`
+
+```rust
+pub fn create_bitcoin_read_client(
+    url: &str,
+    user: &str,
+    password: &str,
+) -> Result<Arc<dyn BitcoinRpcReadClient>>
+```
+
+<ParamField path="url" type="&str">
+  Bitcoin RPC URL
+</ParamField>
+
+<ParamField path="user" type="&str">
+  RPC username
+</ParamField>
+
+<ParamField path="password" type="&str">
+  RPC password
+</ParamField>
+
+**Returns:** `Arc<dyn BitcoinRpcReadClient>` for read-only operations
+
+### Example
+
+```rust
+use core_lane::bitcoin_rpc_client::create_bitcoin_rpc_client;
+
+let client = create_bitcoin_rpc_client(
+    "http://127.0.0.1:18443",
+    "bitcoin",
+    "secret_password"
+)?;
+
+// Use for both read and write operations
+let block_count = client.get_block_count()?;
+println!("Current block height: {}", block_count);
+```
+
+## Read Operations
+
+### get_block_count
+
+Retrieves the current blockchain height.
+
+```rust
+fn get_block_count(&self) -> Result<u64>
+```
+
+**Returns:** Current block height
+
+### get_block_hash
+
+Retrieves block hash at a specific height.
+
+```rust
+fn get_block_hash(&self, height: u64) -> Result<BlockHash>
+```
+
+<ParamField path="height" type="u64">
+  Block height
+</ParamField>
+
+**Returns:** Block hash
+
+### get_block_hash_hex
+
+Retrieves block hash as hex string (avoids byte-order conversion issues).
+
+```rust
+fn get_block_hash_hex(&self, height: u64) -> Result<String>
+```
+
+<ParamField path="height" type="u64">
+  Block height
+</ParamField>
+
+**Returns:** Block hash as hex string
+
+### get_block
+
+Retrieves a block by hash.
+
+```rust
+fn get_block(&self, hash: &BlockHash) -> Result<Block>
+```
+
+<ParamField path="hash" type="&BlockHash">
+  Block hash
+</ParamField>
+
+**Returns:** Decoded Bitcoin block
+
+### get_block_by_hash_hex
+
+Retrieves a block by hex hash string (recommended to avoid conversion issues).
+
+```rust
+fn get_block_by_hash_hex(&self, hash_hex: &str) -> Result<Block>
+```
+
+<ParamField path="hash_hex" type="&str">
+  Block hash as hex string (from get_block_hash_hex)
+</ParamField>
+
+**Returns:** Decoded Bitcoin block
+
+### getblockchaininfo
+
+Retrieves blockchain information including network type.
+
+```rust
+fn getblockchaininfo(&self) -> Result<Value>
+```
+
+**Returns:** JSON value with blockchain info
+
+### get_raw_transaction_info
+
+Retrieves transaction with verbose information.
+
+```rust
+fn get_raw_transaction_info(
+    &self,
+    txid: &Txid,
+    block_hash: Option<&BlockHash>,
+) -> Result<RawTransactionInfo>
+```
+
+<ParamField path="txid" type="&Txid">
+  Transaction ID
+</ParamField>
+
+<ParamField path="block_hash" type="Option<&BlockHash>">
+  Optional block hash hint for faster lookup
+</ParamField>
+
+**Returns:** `RawTransactionInfo` with transaction and block hash
+
+## Supporting Types
+
+### RawTransactionInfo
+
+Result of verbose transaction lookup.
+
+**Location:** `src/bitcoin_rpc_client.rs:16`
+
+```rust
+pub struct RawTransactionInfo {
+    pub block_hash: Option<BlockHash>,
+    pub transaction: Transaction,
+}
+```
+
+<ParamField path="block_hash" type="Option<BlockHash>">
+  Block hash containing the transaction (None if in mempool)
+</ParamField>
+
+<ParamField path="transaction" type="Transaction">
+  Decoded Bitcoin transaction
+</ParamField>
+
+## Complete Example
+
+```rust
+use core_lane::bitcoin_rpc_client::{
+    create_bitcoin_rpc_client,
+    BitcoinRpcReadClient,
+};
+use bitcoin::BlockHash;
+use std::str::FromStr;
+
+// Create client
+let client = create_bitcoin_rpc_client(
+    "http://127.0.0.1:18443",
+    "bitcoin",
+    "password"
+)?;
+
+// Get current height
+let height = client.get_block_count()?;
+println!("Current height: {}", height);
+
+// Get block hash at height
+let hash_hex = client.get_block_hash_hex(height)?;
+println!("Block hash: {}", hash_hex);
+
+// Fetch block (using hex to avoid byte-order issues)
+let block = client.get_block_by_hash_hex(&hash_hex)?;
+println!("Block has {} transactions", block.txdata.len());
+
+// Get transaction info
+if let Some(tx) = block.txdata.first() {
+    let txid = tx.compute_txid();
+    let block_hash = BlockHash::from_str(&hash_hex)?;
+    
+    let tx_info = client.get_raw_transaction_info(
+        &txid,
+        Some(&block_hash)
+    )?;
+    
+    println!("Transaction in block: {:?}", tx_info.block_hash);
+}
+
+// Get network info
+let info = client.getblockchaininfo()?;
+if let Some(chain) = info.get("chain") {
+    println!("Network: {}", chain);
+}
+```
+
+## HTTP Client (Fallback)
+
+The library also provides `HttpBitcoinRpcClient` as a fallback HTTP-only client, though `create_bitcoin_rpc_client` using corepc is recommended.
+
+**Location:** `src/bitcoin_rpc_client.rs:46`
+
+```rust
+pub struct HttpBitcoinRpcClient {
+    url: String,
+    client: reqwest::blocking::Client,
+    auth: Option<(String, String)>,
+}
+```
+
+### Creating HTTP Client
+
+```rust
+use core_lane::bitcoin_rpc_client::HttpBitcoinRpcClient;
+
+let client = HttpBitcoinRpcClient::new(
+    "http://127.0.0.1:18443".to_string(),
+    Some("user".to_string()),
+    Some("pass".to_string())
+)?;
+```
+
+## Error Handling
+
+All RPC methods return `Result<T>` and may fail with:
+- Network errors (connection failures)
+- RPC errors (invalid parameters, method not found)
+- Deserialization errors (invalid response format)
+- Bitcoin errors (block not found, transaction not found, etc.)
+
+```rust
+match client.get_block_count() {
+    Ok(height) => println!("Height: {}", height),
+    Err(e) => eprintln!("RPC error: {}", e),
+}
+```
+
+## Usage with CoreLaneStateForLib
+
+```rust
+use core_lane::{
+    CoreLaneStateForLib,
+    StateManager,
+    create_bitcoin_rpc_client,
+};
+
+let rpc_client = create_bitcoin_rpc_client(
+    "http://127.0.0.1:18443",
+    "user",
+    "pass"
+)?;
+
+let state = CoreLaneStateForLib::new(
+    StateManager::new(),
+    rpc_client.clone(),
+    rpc_client,
+    bitcoin::Network::Regtest
+);
+
+// Now state can verify Bitcoin transactions for intent solving
+```

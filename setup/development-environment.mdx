@@ -1,0 +1,623 @@
+---
+title: 'Development Environment'
+description: 'Set up a complete local development environment with Bitcoin regtest, automated mining, and testing tools'
+---
+
+## Overview
+
+Core Lane includes a comprehensive development environment script (`scripts/dev-environment.sh`) that automates:
+
+- Bitcoin Core regtest network in Docker
+- BDK wallet creation and funding
+- Core Lane node with JSON-RPC
+- Automated block mining
+- Filler bot for exit intent processing
+- Test address funding
+- Optional blockchain reorganization testing
+
+## Quick Start
+
+<Steps>
+  <Step title="Prerequisites">
+    Ensure you have:
+    - Docker installed and running
+    - Rust toolchain (1.90+)
+    - `bc`, `jq`, `curl` command-line tools
+    - Git
+  </Step>
+
+  <Step title="Build Core Lane">
+    ```bash
+    cargo build
+    ```
+  </Step>
+
+  <Step title="Start Development Environment">
+    ```bash
+    ./scripts/dev-environment.sh start
+    ```
+    
+    This will:
+    - Start Bitcoin regtest in Docker
+    - Create and fund a BDK wallet
+    - Start Core Lane node on port 8546
+    - Start filler bot
+    - Begin automated mining
+    - Fund test addresses
+  </Step>
+
+  <Step title="Verify">
+    Check that services are running:
+    ```bash
+    ./scripts/dev-environment.sh status
+    ```
+    
+    Check test address balances:
+    ```bash
+    ./scripts/dev-environment.sh balances
+    ```
+  </Step>
+</Steps>
+
+## Development Script Commands
+
+The `dev-environment.sh` script provides several commands:
+
+### Start Environment
+
+```bash
+./scripts/dev-environment.sh start
+```
+
+**What it does**:
+1. Starts Bitcoin Core 30.0 in Docker (regtest mode)
+2. Creates new BDK wallet with generated mnemonic
+3. Mines 111 blocks to activate coinbase and fund wallet
+4. Starts Core Lane node with JSON-RPC on `http://127.0.0.1:8546`
+5. Clones and builds filler bot from GitHub
+6. Starts filler bot for processing exit intents
+7. Funds filler bot Bitcoin wallet
+8. Starts automated mining loop (1 block per 10 seconds)
+9. Burns BTC to 4 test addresses
+10. Shows live logs from Core Lane and filler bot
+
+**Environment Variables**:
+- `REORG=1` - Enable hazardous reorg mode (see below)
+
+### Stop Environment
+
+```bash
+./scripts/dev-environment.sh stop
+```
+
+Stops all services:
+- Mining loop
+- Filler bot
+- Core Lane node
+- Log viewers
+- Bitcoin regtest container
+
+### Check Status
+
+```bash
+./scripts/dev-environment.sh status
+```
+
+Shows status of:
+- Bitcoin regtest (running/stopped, block height)
+- Core Lane node (PID, JSON-RPC endpoint)
+- Mining loop (active/inactive)
+- Filler bot (running/stopped)
+- Test addresses
+
+### Check Balances
+
+```bash
+./scripts/dev-environment.sh balances
+```
+
+Queries Core Lane for balances of all test addresses.
+
+## Configuration
+
+### Default Settings
+
+The development environment uses these defaults:
+
+<ParamField path="BITCOIN_CONTAINER" type="string" default="bitcoin-regtest">
+  Docker container name for Bitcoin Core
+</ParamField>
+
+<ParamField path="BITCOIN_DATA_DIR" type="string" default="$HOME/bitcoin-regtest">
+  Host directory for Bitcoin data
+</ParamField>
+
+<ParamField path="RPC_USER" type="string" default="bitcoin">
+  Bitcoin RPC username
+</ParamField>
+
+<ParamField path="RPC_PASSWORD" type="string" default="bitcoin123">
+  Bitcoin RPC password
+</ParamField>
+
+<ParamField path="RPC_URL" type="string" default="http://127.0.0.1:18443">
+  Bitcoin RPC endpoint
+</ParamField>
+
+<ParamField path="JSON_RPC_PORT" type="integer" default="8546">
+  Core Lane JSON-RPC port
+</ParamField>
+
+<ParamField path="JSON_RPC_URL" type="string" default="http://127.0.0.1:8546">
+  Core Lane JSON-RPC endpoint
+</ParamField>
+
+### Test Addresses
+
+Four Anvil/Hardhat test addresses are automatically funded:
+
+```javascript
+ANVIL_ADDRESSES=(
+    "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"  // Address 0
+    "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"  // Address 1
+    "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"  // Address 2
+    "0x90F79bf6EB2c4f870365E785982E1f101E93b906"  // Address 3
+)
+```
+
+Each address receives a burn transaction of 1,000,000 sats.
+
+### Filler Bot Configuration
+
+<ParamField path="FILLER_BOT_DIR" type="string" default="external/filler-bot">
+  Directory where filler bot is cloned
+</ParamField>
+
+<ParamField path="FILLER_BOT_PRIVATE_KEY" type="string" default="0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a">
+  Private key for filler bot (Anvil test key #1)
+</ParamField>
+
+<ParamField path="EXIT_MARKETPLACE" type="address" default="0x0000000000000000000000000000000000000045">
+  Exit marketplace contract address
+</ParamField>
+
+## Wallet Management
+
+### Wallet Creation
+
+On first run, the script creates a BDK wallet:
+
+```bash
+# Wallet is created with:
+core-lane-node --plain create-wallet --network regtest
+
+# Mnemonic saved to:
+.dev-wallets/mnemonic_regtest.txt
+
+# Database created at:
+wallet_regtest.sqlite3
+```
+
+**Security**: The mnemonic is saved locally for development. Don't use these wallets for real funds.
+
+### Accessing Your Wallet
+
+Get a receive address:
+```bash
+core-lane-node --plain get-address \
+  --network regtest \
+  --mnemonic-file .dev-wallets/mnemonic_regtest.txt
+```
+
+Check balance:
+```bash
+core-lane-node get-bitcoin-balance \
+  --network regtest \
+  --mnemonic-file .dev-wallets/mnemonic_regtest.txt \
+  --rpc-url http://127.0.0.1:18443 \
+  --rpc-user bitcoin \
+  --rpc-password bitcoin123
+```
+
+### Manual Burn Transaction
+
+Create additional burn transactions:
+
+```bash
+core-lane-node burn \
+  --burn-amount 500000 \
+  --chain-id 1281453634 \
+  --eth-address 0xYourAddress \
+  --network regtest \
+  --mnemonic-file .dev-wallets/mnemonic_regtest.txt \
+  --rpc-password bitcoin123
+```
+
+## Bitcoin Regtest Network
+
+### Docker Configuration
+
+Bitcoin Core runs with these settings:
+
+```bash
+docker run --rm -d --name bitcoin-regtest \
+  -p 18443:18443 -p 18444:18444 \
+  -v "$HOME/bitcoin-regtest:/bitcoin/.bitcoin" \
+  bitcoin/bitcoin:30.0 \
+  -regtest \
+  -fallbackfee=0.0002 \
+  -maxtxfee=1.0 \
+  -server=1 \
+  -printtoconsole \
+  -rpcuser=bitcoin \
+  -rpcpassword=bitcoin123 \
+  -rpcallowip=0.0.0.0/0 \
+  -rpcbind=0.0.0.0 \
+  -txindex=1
+```
+
+### Manual Bitcoin CLI Commands
+
+Interact with Bitcoin directly:
+
+```bash
+# Get blockchain info
+docker exec bitcoin-regtest bitcoin-cli -regtest \
+  -rpcuser=bitcoin -rpcpassword=bitcoin123 getblockchaininfo
+
+# Mine blocks to address
+docker exec bitcoin-regtest bitcoin-cli -regtest \
+  -rpcuser=bitcoin -rpcpassword=bitcoin123 \
+  generatetoaddress 1 bcrt1qYourAddress
+
+# Get transaction
+docker exec bitcoin-regtest bitcoin-cli -regtest \
+  -rpcuser=bitcoin -rpcpassword=bitcoin123 \
+  getrawtransaction txid true
+```
+
+### Mining Loop
+
+The automated mining loop:
+- Mines 1 block every 10 seconds
+- Sends rewards to BDK wallet addresses
+- Continues until environment is stopped
+- PID saved to `.dev-mining-loop.pid`
+
+**Manual mining**:
+```bash
+# Get fresh address
+ADDRESS=$(core-lane-node --plain get-address --network regtest)
+
+# Mine 5 blocks
+docker exec bitcoin-regtest bitcoin-cli -regtest \
+  -rpcuser=bitcoin -rpcpassword=bitcoin123 \
+  generatetoaddress 5 $ADDRESS
+```
+
+## Hazardous Reorg Mode
+
+### Enable Reorgs
+
+Test blockchain reorganization handling:
+
+```bash
+REORG=1 ./scripts/dev-environment.sh start
+```
+
+**Behavior**:
+- After block height 130
+- Every 7 blocks
+- Triggers a 5-block reorganization
+- Tests Core Lane's reorg recovery
+
+### How Reorgs Work
+
+The script:
+1. Waits for block height to be > 130 and divisible by 7
+2. Invalidates block at height N-5 (fork point)
+3. Mines N+1 blocks to create longer chain
+4. Bitcoin reorganizes to new chain
+5. Core Lane detects and handles reorg
+
+### Manual Reorg Trigger
+
+```bash
+# Source the script to get the function
+source ./scripts/dev-environment.sh
+
+# Trigger 5-block reorg
+trigger_reorg 5
+```
+
+**Warning**: This will cause state rollback in Core Lane. Only use in development.
+
+## Filler Bot
+
+The filler bot processes exit intents (withdrawals from Core Lane to Bitcoin).
+
+### Filler Bot Setup
+
+Automatically handles:
+1. Clone from https://github.com/lanelayer/filler-bot
+2. Build with `cargo build`
+3. Create Bitcoin wallet for the bot
+4. Fund bot wallet with mining rewards
+5. Start bot monitoring Core Lane
+
+### Filler Bot Configuration
+
+```bash
+RUST_LOG=debug filler-bot start \
+  --core-lane-url http://127.0.0.1:8546 \
+  --core-lane-private-key 0x5de4111... \
+  --bitcoin-backend rpc \
+  --bitcoin-rpc-url http://127.0.0.1:18443 \
+  --bitcoin-rpc-user bitcoin \
+  --bitcoin-rpc-password bitcoin123 \
+  --exit-marketplace 0x0000000000000000000000000000000000000045 \
+  --bitcoin-mnemonic "test test test test test test test test test test test junk" \
+  --bitcoin-wallet bot_wallet
+```
+
+### Filler Bot Logs
+
+Logs are shown with `[FILLER-BOT]` prefix and saved to:
+```
+external/filler-bot.log
+```
+
+View logs:
+```bash
+tail -f external/filler-bot.log
+```
+
+## Log Files
+
+### Core Lane Logs
+
+Location: `core-lane.log`
+
+Shown with `[CORE-LANE]` prefix in the terminal.
+
+**Log levels**:
+```bash
+# Set in the script
+RUST_LOG=info,debug ./target/debug/core-lane-node start ...
+```
+
+### Filler Bot Logs
+
+Location: `external/filler-bot.log`
+
+Shown with `[FILLER-BOT]` prefix in the terminal.
+
+### View Logs
+
+```bash
+# Core Lane logs
+tail -f core-lane.log
+
+# Filler bot logs
+tail -f external/filler-bot.log
+
+# Both with color prefixes (auto-started by dev script)
+# [CORE-LANE] prefix in green
+# [FILLER-BOT] prefix in blue
+```
+
+## Using the Development Environment
+
+### Connect with MetaMask
+
+Add Core Lane network to MetaMask:
+
+- **Network Name**: Core Lane Dev
+- **RPC URL**: `http://127.0.0.1:8546`
+- **Chain ID**: `1281453634`
+- **Currency Symbol**: `laneBTC`
+
+### Test with Cast (Foundry)
+
+```bash
+# Get balance
+cast balance 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 \
+  --rpc-url http://127.0.0.1:8546
+
+# Get block number
+cast block-number --rpc-url http://127.0.0.1:8546
+
+# Get block
+cast block latest --rpc-url http://127.0.0.1:8546
+
+# Send transaction
+cast send 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 \
+  --value 0.1ether \
+  --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
+  --rpc-url http://127.0.0.1:8546
+```
+
+### Test with cURL
+
+```bash
+# Get balance
+curl -X POST http://127.0.0.1:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc":"2.0",
+    "method":"eth_getBalance",
+    "params":["0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", "latest"],
+    "id":1
+  }'
+
+# Get block number
+curl -X POST http://127.0.0.1:8546 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+
+# Trigger on-demand poll (if enabled)
+curl -X POST http://127.0.0.1:8546/do_poll
+```
+
+## Makefile Integration
+
+The development environment integrates with Makefile commands:
+
+```bash
+# Start development environment
+make dev-start
+
+# Stop development environment
+make dev-stop
+
+# Check status
+make dev-status
+
+# Check balances
+make dev-balances
+```
+
+These are wrappers around `scripts/dev-environment.sh`.
+
+## Alternative: Basic Test Environment
+
+For minimal testing without filler bot:
+
+```bash
+# Start basic regtest environment
+make start-env
+
+# Run a burn transaction
+make run-burn
+
+# Run the node
+make run-node
+
+# Stop environment
+make stop-env
+```
+
+## Cleanup and Reset
+
+### Clean All Data
+
+```bash
+# Stop environment
+./scripts/dev-environment.sh stop
+
+# Remove all data
+rm -rf \
+  .dev-wallets/ \
+  wallet_*.sqlite3 \
+  core-lane.log \
+  external/ \
+  blocks/ \
+  metastate/ \
+  deltas/ \
+  chain_index/ \
+  tip \
+  ~/bitcoin-regtest/
+
+# Restart fresh
+./scripts/dev-environment.sh start
+```
+
+### Clean Only Core Lane State
+
+```bash
+# Keep wallets and Bitcoin data, reset only Core Lane state
+rm -rf blocks/ metastate/ deltas/ chain_index/ tip
+./scripts/dev-environment.sh start
+```
+
+## Troubleshooting
+
+### Docker Not Running
+
+```bash
+# Check Docker status
+docker info
+
+# Start Docker
+# macOS: Open Docker Desktop
+# Linux: sudo systemctl start docker
+```
+
+### Port Already in Use
+
+```bash
+# Find process on port 8546
+lsof -i :8546
+
+# Kill process
+kill -9 <PID>
+
+# Or edit script to use different port
+# Change JSON_RPC_PORT in dev-environment.sh
+```
+
+### Services Not Starting
+
+Check individual components:
+
+```bash
+# Check Bitcoin
+docker ps | grep bitcoin-regtest
+
+# Check Core Lane
+ps aux | grep core-lane-node
+
+# Check Filler Bot
+ps aux | grep filler-bot
+
+# Check logs
+tail -f core-lane.log
+tail -f external/filler-bot.log
+```
+
+### Wallet Not Funded
+
+```bash
+# Check Bitcoin balance
+core-lane-node get-bitcoin-balance \
+  --network regtest \
+  --mnemonic-file .dev-wallets/mnemonic_regtest.txt \
+  --rpc-url http://127.0.0.1:18443 \
+  --rpc-user bitcoin \
+  --rpc-password bitcoin123
+
+# Manually mine blocks to wallet
+ADDRESS=$(core-lane-node --plain get-address \
+  --network regtest \
+  --mnemonic-file .dev-wallets/mnemonic_regtest.txt)
+
+docker exec bitcoin-regtest bitcoin-cli -regtest \
+  -rpcuser=bitcoin -rpcpassword=bitcoin123 \
+  generatetoaddress 10 $ADDRESS
+```
+
+### State Out of Sync
+
+If Core Lane state becomes corrupted or out of sync:
+
+```bash
+# Stop everything
+./scripts/dev-environment.sh stop
+
+# Reset Core Lane state only (keep wallets)
+rm -rf blocks/ metastate/ deltas/ chain_index/ tip
+
+# Restart
+./scripts/dev-environment.sh start
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="JSON-RPC API" icon="code" href="/api/overview">
+    Interact with Core Lane via JSON-RPC
+  </Card>
+  <Card title="Node Configuration" icon="gear" href="/operations/node-configuration">
+    Configure your Core Lane node
+  </Card>
+</CardGroup>

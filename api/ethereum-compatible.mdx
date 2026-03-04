@@ -1,0 +1,906 @@
+---
+title: 'Ethereum-Compatible Methods'
+description: 'Standard Ethereum JSON-RPC methods supported by Core Lane'
+---
+
+Core Lane implements standard Ethereum JSON-RPC methods, providing compatibility with existing Ethereum tools and libraries.
+
+## Account Methods
+
+### eth_getBalance
+
+Returns the balance of the account at the given address.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_getBalance",
+    "params": ["0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", "latest"],
+    "id": 1
+  }'
+```
+
+<ParamField path="params[0]" type="string" required>
+  Address to check (20-byte hex string with 0x prefix)
+</ParamField>
+
+<ParamField path="params[1]" type="string" required>
+  Block parameter: "latest", "earliest", "pending", or block number (hex)
+</ParamField>
+
+<ResponseField name="result" type="string">
+  Account balance in wei (hex-encoded)
+</ResponseField>
+
+**Example Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": "0xde0b6b3a7640000",
+  "id": 1
+}
+```
+
+---
+
+### eth_getTransactionCount
+
+Returns the number of transactions sent from an address (nonce).
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_getTransactionCount",
+    "params": ["0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", "latest"],
+    "id": 1
+  }'
+```
+
+<ParamField path="params[0]" type="string" required>
+  Address to check
+</ParamField>
+
+<ParamField path="params[1]" type="string" required>
+  Block parameter
+</ParamField>
+
+<ResponseField name="result" type="string">
+  Transaction count (nonce) as hex-encoded integer
+</ResponseField>
+
+**Example Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": "0x5",
+  "id": 1
+}
+```
+
+---
+
+### eth_getCode
+
+Returns code at a given address.
+
+<Note>
+Core Lane currently returns empty code (0x) as smart contract deployment is not yet supported.
+</Note>
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": ["0x0000000000000000000000000000000000000045", "latest"],
+    "id": 1
+  }'
+```
+
+<ParamField path="params[0]" type="string" required>
+  Address to query
+</ParamField>
+
+<ParamField path="params[1]" type="string" required>
+  Block parameter
+</ParamField>
+
+<ResponseField name="result" type="string">
+  Contract bytecode (currently always "0x")
+</ResponseField>
+
+---
+
+### eth_getStorageAt
+
+Returns the value from a storage position at a given address.
+
+<Note>
+Core Lane currently returns zero storage values as contract storage is not yet supported.
+</Note>
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_getStorageAt",
+    "params": [
+      "0x0000000000000000000000000000000000000045",
+      "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "latest"
+    ],
+    "id": 1
+  }'
+```
+
+<ParamField path="params[0]" type="string" required>
+  Address of the storage
+</ParamField>
+
+<ParamField path="params[1]" type="string" required>
+  Storage position (32-byte hex)
+</ParamField>
+
+<ParamField path="params[2]" type="string" required>
+  Block parameter
+</ParamField>
+
+<ResponseField name="result" type="string">
+  Storage value (32-byte hex, currently always zero)
+</ResponseField>
+
+---
+
+## Transaction Methods
+
+### eth_sendRawTransaction
+
+Sends a signed transaction to the network.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_sendRawTransaction",
+    "params": ["0x02f8...signed_tx_data..."],
+    "id": 1
+  }'
+```
+
+<ParamField path="params[0]" type="string" required>
+  Signed transaction data (hex-encoded with 0x prefix)
+</ParamField>
+
+<ResponseField name="result" type="string">
+  Transaction hash (32-byte hex)
+</ResponseField>
+
+**Example Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": "0x7d2a2c7e2e7c58e7f9e7d2a2c7e2e7c58e7f9e7d2a2c7e2e7c58e7f9e7d2a2c",
+  "id": 1
+}
+```
+
+<Info>
+Depending on node configuration, transactions may be:
+- Submitted to Bitcoin DA (if Bitcoin client is configured)
+- Forwarded to a sequencer RPC (if `--sequencer-rpc-url` is set)
+- Submitted to Espresso (if Espresso submit URL is configured)
+- Forwarded to upstream Core Lane RPC (in derived mode)
+</Info>
+
+---
+
+### eth_sendTransaction
+
+Sends a transaction from an account (requires unlocked account).
+
+<Warning>
+This method is not yet implemented. Use `eth_sendRawTransaction` with pre-signed transactions instead.
+</Warning>
+
+---
+
+### eth_getTransactionByHash
+
+Returns transaction information by hash.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_getTransactionByHash",
+    "params": ["0x7d2a2c7e2e7c58e7f9e7d2a2c7e2e7c58e7f9e7d2a2c7e2e7c58e7f9e7d2a2c"],
+    "id": 1
+  }'
+```
+
+<ParamField path="params[0]" type="string" required>
+  Transaction hash (32-byte hex)
+</ParamField>
+
+<ResponseField name="result" type="object | null">
+  Transaction object or null if not found
+  <Expandable title="Transaction Object Fields">
+    <ResponseField name="hash" type="string">
+      Transaction hash
+    </ResponseField>
+    <ResponseField name="nonce" type="string">
+      Number of transactions from sender (hex)
+    </ResponseField>
+    <ResponseField name="blockHash" type="string">
+      Hash of containing block
+    </ResponseField>
+    <ResponseField name="blockNumber" type="string">
+      Block number (hex)
+    </ResponseField>
+    <ResponseField name="transactionIndex" type="string">
+      Position in block (hex)
+    </ResponseField>
+    <ResponseField name="from" type="string">
+      Sender address
+    </ResponseField>
+    <ResponseField name="to" type="string">
+      Recipient address (or "null" for contract creation)
+    </ResponseField>
+    <ResponseField name="value" type="string">
+      Transfer value in wei (hex)
+    </ResponseField>
+    <ResponseField name="gas" type="string">
+      Gas limit (hex)
+    </ResponseField>
+    <ResponseField name="gasPrice" type="string">
+      Gas price in wei (hex, for Legacy/EIP-2930)
+    </ResponseField>
+    <ResponseField name="maxFeePerGas" type="string">
+      Max fee per gas (hex, for EIP-1559)
+    </ResponseField>
+    <ResponseField name="maxPriorityFeePerGas" type="string">
+      Max priority fee per gas (hex, for EIP-1559)
+    </ResponseField>
+    <ResponseField name="input" type="string">
+      Transaction data (hex)
+    </ResponseField>
+    <ResponseField name="v" type="string">
+      ECDSA recovery id (hex)
+    </ResponseField>
+    <ResponseField name="r" type="string">
+      ECDSA signature r (hex)
+    </ResponseField>
+    <ResponseField name="s" type="string">
+      ECDSA signature s (hex)
+    </ResponseField>
+    <ResponseField name="type" type="string">
+      Transaction type: "0x0" (Legacy), "0x1" (EIP-2930), "0x2" (EIP-1559)
+    </ResponseField>
+    <ResponseField name="chainId" type="string">
+      Chain ID (hex)
+    </ResponseField>
+    <ResponseField name="accessList" type="array">
+      Access list (for EIP-2930 and EIP-1559)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+### eth_getTransactionReceipt
+
+Returns the receipt of a transaction by hash.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_getTransactionReceipt",
+    "params": ["0x7d2a2c7e2e7c58e7f9e7d2a2c7e2e7c58e7f9e7d2a2c7e2e7c58e7f9e7d2a2c"],
+    "id": 1
+  }'
+```
+
+<ParamField path="params[0]" type="string" required>
+  Transaction hash (32-byte hex)
+</ParamField>
+
+<ResponseField name="result" type="object | null">
+  Receipt object or null if not found
+  <Expandable title="Receipt Object Fields">
+    <ResponseField name="transactionHash" type="string">
+      Transaction hash
+    </ResponseField>
+    <ResponseField name="blockHash" type="string">
+      Hash of containing block
+    </ResponseField>
+    <ResponseField name="blockNumber" type="string">
+      Block number (hex)
+    </ResponseField>
+    <ResponseField name="transactionIndex" type="string">
+      Position in block (hex)
+    </ResponseField>
+    <ResponseField name="from" type="string">
+      Sender address
+    </ResponseField>
+    <ResponseField name="to" type="string">
+      Recipient address
+    </ResponseField>
+    <ResponseField name="cumulativeGasUsed" type="string">
+      Total gas used in block up to this transaction (hex)
+    </ResponseField>
+    <ResponseField name="gasUsed" type="string">
+      Gas used by this transaction (hex)
+    </ResponseField>
+    <ResponseField name="effectiveGasPrice" type="string">
+      Actual gas price paid (hex)
+    </ResponseField>
+    <ResponseField name="contractAddress" type="string | null">
+      Address of created contract (or null)
+    </ResponseField>
+    <ResponseField name="logs" type="array">
+      Array of log objects
+    </ResponseField>
+    <ResponseField name="logsBloom" type="string">
+      Bloom filter for logs (256-byte hex)
+    </ResponseField>
+    <ResponseField name="status" type="string">
+      "0x1" for success, "0x0" for failure
+    </ResponseField>
+    <ResponseField name="type" type="string">
+      Transaction type
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+### eth_getTransactionByBlockHashAndIndex
+
+Returns transaction information by block hash and transaction index.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_getTransactionByBlockHashAndIndex",
+    "params": [
+      "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+      "0x0"
+    ],
+    "id": 1
+  }'
+```
+
+<ParamField path="params[0]" type="string" required>
+  Block hash (32-byte hex)
+</ParamField>
+
+<ParamField path="params[1]" type="string" required>
+  Transaction index within block (hex)
+</ParamField>
+
+<ResponseField name="result" type="object | null">
+  Transaction object or null if not found (same format as `eth_getTransactionByHash`)
+</ResponseField>
+
+---
+
+### eth_getTransactionByBlockNumberAndIndex
+
+Returns transaction information by block number and transaction index.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_getTransactionByBlockNumberAndIndex",
+    "params": ["latest", "0x0"],
+    "id": 1
+  }'
+```
+
+<ParamField path="params[0]" type="string" required>
+  Block number (hex) or "latest", "earliest", "pending"
+</ParamField>
+
+<ParamField path="params[1]" type="string" required>
+  Transaction index within block (hex)
+</ParamField>
+
+<ResponseField name="result" type="object | null">
+  Transaction object or null if not found
+</ResponseField>
+
+---
+
+## Block Methods
+
+### eth_blockNumber
+
+Returns the current block number.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_blockNumber",
+    "params": [],
+    "id": 1
+  }'
+```
+
+<ResponseField name="result" type="string">
+  Current block number (hex)
+</ResponseField>
+
+**Example Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": "0x4b7",
+  "id": 1
+}
+```
+
+---
+
+### eth_getBlockByNumber
+
+Returns information about a block by number.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_getBlockByNumber",
+    "params": ["latest", false],
+    "id": 1
+  }'
+```
+
+<ParamField path="params[0]" type="string" required>
+  Block number (hex) or "latest", "earliest", "pending"
+</ParamField>
+
+<ParamField path="params[1]" type="boolean" required>
+  If true, returns full transaction objects; if false, returns only transaction hashes
+</ParamField>
+
+<ResponseField name="result" type="object | null">
+  Block object or null if not found
+  <Expandable title="Block Object Fields">
+    <ResponseField name="number" type="string">
+      Block number (hex)
+    </ResponseField>
+    <ResponseField name="hash" type="string">
+      Block hash (32-byte hex)
+    </ResponseField>
+    <ResponseField name="parentHash" type="string">
+      Parent block hash
+    </ResponseField>
+    <ResponseField name="timestamp" type="string">
+      Unix timestamp (hex)
+    </ResponseField>
+    <ResponseField name="transactions" type="array">
+      Array of transaction hashes or objects
+    </ResponseField>
+    <ResponseField name="gasUsed" type="string">
+      Total gas used in block (hex)
+    </ResponseField>
+    <ResponseField name="gasLimit" type="string">
+      Gas limit for block (hex)
+    </ResponseField>
+    <ResponseField name="baseFeePerGas" type="string">
+      EIP-1559 base fee per gas (hex)
+    </ResponseField>
+    <ResponseField name="miner" type="string">
+      Address that produced the block
+    </ResponseField>
+    <ResponseField name="difficulty" type="string">
+      Difficulty (hex)
+    </ResponseField>
+    <ResponseField name="totalDifficulty" type="string">
+      Total difficulty (hex)
+    </ResponseField>
+    <ResponseField name="extraData" type="string">
+      Extra data field (hex)
+    </ResponseField>
+    <ResponseField name="stateRoot" type="string">
+      State root hash
+    </ResponseField>
+    <ResponseField name="receiptsRoot" type="string">
+      Receipts root hash
+    </ResponseField>
+    <ResponseField name="transactionsRoot" type="string">
+      Transactions root hash
+    </ResponseField>
+    <ResponseField name="logsBloom" type="string">
+      Logs bloom filter (hex)
+    </ResponseField>
+    <ResponseField name="nonce" type="string">
+      Block nonce (hex)
+    </ResponseField>
+    <ResponseField name="size" type="string">
+      Block size estimate (hex)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+### eth_getBlockByHash
+
+Returns information about a block by hash.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_getBlockByHash",
+    "params": [
+      "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+      false
+    ],
+    "id": 1
+  }'
+```
+
+<ParamField path="params[0]" type="string" required>
+  Block hash (32-byte hex)
+</ParamField>
+
+<ParamField path="params[1]" type="boolean" required>
+  If true, returns full transaction objects; if false, returns only transaction hashes
+</ParamField>
+
+<ResponseField name="result" type="object | null">
+  Block object or null if not found (same format as `eth_getBlockByNumber`)
+</ResponseField>
+
+---
+
+### eth_getBlockTransactionCountByNumber
+
+Returns the number of transactions in a block.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_getBlockTransactionCountByNumber",
+    "params": ["latest"],
+    "id": 1
+  }'
+```
+
+<ParamField path="params[0]" type="string" required>
+  Block number (hex) or "latest", "earliest", "pending"
+</ParamField>
+
+<ResponseField name="result" type="string">
+  Transaction count (hex)
+</ResponseField>
+
+---
+
+## Network Methods
+
+### eth_chainId
+
+Returns the chain ID.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_chainId",
+    "params": [],
+    "id": 1
+  }'
+```
+
+<ResponseField name="result" type="string">
+  Chain ID: "0x4c616e42" (1281453634 in decimal)
+</ResponseField>
+
+---
+
+### eth_syncing
+
+Returns syncing status.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_syncing",
+    "params": [],
+    "id": 1
+  }'
+```
+
+<ResponseField name="result" type="boolean | object">
+  `false` if not syncing, or sync status object if syncing
+  <Expandable title="Sync Status Object">
+    <ResponseField name="startingBlock" type="string">
+      Block where sync started (hex)
+    </ResponseField>
+    <ResponseField name="currentBlock" type="string">
+      Current block being processed (hex)
+    </ResponseField>
+    <ResponseField name="highestBlock" type="string">
+      Estimated highest block (hex)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+### net_version
+
+Returns the network ID.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "net_version",
+    "params": [],
+    "id": 1
+  }'
+```
+
+<ResponseField name="result" type="string">
+  Network ID: "1281453634"
+</ResponseField>
+
+---
+
+### net_listening
+
+Returns whether the node is listening for network connections.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "net_listening",
+    "params": [],
+    "id": 1
+  }'
+```
+
+<ResponseField name="result" type="boolean">
+  Always returns `true`
+</ResponseField>
+
+---
+
+### net_peerCount
+
+Returns the number of peers connected to the node.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "net_peerCount",
+    "params": [],
+    "id": 1
+  }'
+```
+
+<ResponseField name="result" type="string">
+  Peer count (hex, currently always "0x0" as P2P is not yet implemented)
+</ResponseField>
+
+---
+
+## Gas and Fee Methods
+
+### eth_gasPrice
+
+Returns the current gas price.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_gasPrice",
+    "params": [],
+    "id": 1
+  }'
+```
+
+<ResponseField name="result" type="string">
+  Gas price in wei (hex)
+</ResponseField>
+
+---
+
+### eth_estimateGas
+
+Estimates the gas needed to execute a transaction.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_estimateGas",
+    "params": [{
+      "from": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+      "to": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      "value": "0xde0b6b3a7640000"
+    }],
+    "id": 1
+  }'
+```
+
+<ParamField path="params[0]" type="object" required>
+  Transaction call object
+  <Expandable title="Call Object Fields">
+    <ParamField path="from" type="string">
+      Sender address (optional)
+    </ParamField>
+    <ParamField path="to" type="string">
+      Recipient address
+    </ParamField>
+    <ParamField path="value" type="string">
+      Value to transfer (hex, optional)
+    </ParamField>
+    <ParamField path="data" type="string">
+      Transaction data (hex, optional)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="params[1]" type="string">
+  Block parameter (optional)
+</ParamField>
+
+<ResponseField name="result" type="string">
+  Estimated gas amount (hex, currently returns "0x5208" - 21000 gas)
+</ResponseField>
+
+---
+
+### eth_maxPriorityFeePerGas
+
+Returns the suggested priority fee per gas for EIP-1559 transactions.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_maxPriorityFeePerGas",
+    "params": [],
+    "id": 1
+  }'
+```
+
+<ResponseField name="result" type="string">
+  Suggested priority fee in wei (hex). Returns 10% of current base fee, minimum 0.1 Gwei
+</ResponseField>
+
+---
+
+### eth_feeHistory
+
+Returns historical gas fee data.
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_feeHistory",
+    "params": ["0x4", "latest", [25, 50, 75]],
+    "id": 1
+  }'
+```
+
+<ParamField path="params[0]" type="string" required>
+  Number of blocks to retrieve (hex)
+</ParamField>
+
+<ParamField path="params[1]" type="string" required>
+  Newest block (hex, "latest", or "pending")
+</ParamField>
+
+<ParamField path="params[2]" type="array">
+  Array of reward percentiles (0-100, optional)
+</ParamField>
+
+<ResponseField name="result" type="object">
+  Fee history data
+  <Expandable title="Fee History Fields">
+    <ResponseField name="oldestBlock" type="string">
+      Oldest block in range (hex)
+    </ResponseField>
+    <ResponseField name="baseFeePerGas" type="array">
+      Array of base fees per gas (hex strings)
+    </ResponseField>
+    <ResponseField name="gasUsedRatio" type="array">
+      Array of gas used ratios (0.0 to 1.0)
+    </ResponseField>
+    <ResponseField name="reward" type="array">
+      Array of percentile rewards (if requested)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+## Call Methods
+
+### eth_call
+
+Executes a call without creating a transaction.
+
+<Note>
+Core Lane supports intent-related calls via this method. See the [Core Lane Methods](/api/core-lane-methods) page for intent-specific functionality.
+</Note>
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [{
+      "to": "0x0000000000000000000000000000000000000045",
+      "data": "0x..."
+    }, "latest"],
+    "id": 1
+  }'
+```
+
+<ParamField path="params[0]" type="object" required>
+  Transaction call object
+  <Expandable title="Call Object Fields">
+    <ParamField path="from" type="string">
+      Sender address (optional)
+    </ParamField>
+    <ParamField path="to" type="string">
+      Target address
+    </ParamField>
+    <ParamField path="data" type="string">
+      Encoded function call (hex)
+    </ParamField>
+    <ParamField path="value" type="string">
+      Value to send (hex, optional)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="params[1]" type="string" required>
+  Block parameter
+</ParamField>
+
+<ResponseField name="result" type="string">
+  Call result (hex-encoded bytes)
+</ResponseField>

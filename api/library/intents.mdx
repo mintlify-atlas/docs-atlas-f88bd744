@@ -1,0 +1,430 @@
+---
+title: "Intent System"
+description: "Intent creation, locking, solving, and cancellation API"
+---
+
+## Overview
+
+The intent system enables programmable cross-chain operations and conditional execution. Users can create intents that solvers fulfill in exchange for rewards.
+
+## Intent Types
+
+### IntentType
+
+Enum defining supported intent types.
+
+**Location:** `src/intents.rs:44`
+
+```rust
+pub enum IntentType {
+    AnchorBitcoinFill = 1,
+    RiscVProgram = 2,
+}
+```
+
+<ParamField path="AnchorBitcoinFill" type="1">
+  Intent for Bitcoin L1 fills - requires on-chain verification
+</ParamField>
+
+<ParamField path="RiscVProgram" type="2">
+  Intent for RISC-V program execution via Cartesi
+</ParamField>
+
+## Core Structures
+
+### Intent
+
+Represents an intent with associated value and state.
+
+**Location:** `src/intents.rs:412`
+
+```rust
+pub struct Intent {
+    pub data: Bytes,
+    pub value: u64,
+    pub status: IntentStatus,
+    pub last_command: IntentCommandType,
+    pub creator: Address,
+}
+```
+
+<ParamField path="data" type="Bytes">
+  CBOR-encoded IntentData containing type and payload
+</ParamField>
+
+<ParamField path="value" type="u64">
+  Value locked in the intent (in wei). Currently limited to u64::MAX (~18.4 ETH).
+</ParamField>
+
+<ParamField path="status" type="IntentStatus">
+  Current status: Submitted, Locked, Solved, or Cancelled
+</ParamField>
+
+<ParamField path="last_command" type="IntentCommandType">
+  Last operation performed on the intent
+</ParamField>
+
+<ParamField path="creator" type="Address">
+  Address that created the intent
+</ParamField>
+
+### IntentStatus
+
+Intent lifecycle states.
+
+**Location:** `src/intents.rs:391`
+
+```rust
+pub enum IntentStatus {
+    Submitted,
+    Locked(Address),
+    Solved,
+    Cancelled,
+}
+```
+
+<ParamField path="Submitted" type="variant">
+  Intent created and awaiting a solver
+</ParamField>
+
+<ParamField path="Locked" type="Locked(Address)">
+  Intent locked by a solver (contains solver's address)
+</ParamField>
+
+<ParamField path="Solved" type="variant">
+  Intent successfully fulfilled
+</ParamField>
+
+<ParamField path="Cancelled" type="variant">
+  Intent cancelled by creator
+</ParamField>
+
+### IntentCommandType
+
+Commands that can be performed on intents.
+
+**Location:** `src/intents.rs:403`
+
+```rust
+pub enum IntentCommandType {
+    Created = 1,
+    CancelIntent = 2,
+    LockIntentForSolving = 3,
+    SolveIntent = 4,
+    CancelIntentLock = 5,
+}
+```
+
+### IntentData
+
+CBOR-encoded intent data structure.
+
+**Location:** `src/intents.rs:58`
+
+```rust
+pub struct IntentData {
+    pub intent_type: IntentType,
+    pub data: Vec<u8>,
+}
+```
+
+#### Methods
+
+<ParamField path="from_cbor" type="fn(cbor_bytes: &[u8]) -> Result<Self>">
+  Deserializes IntentData from CBOR bytes.
+</ParamField>
+
+<ParamField path="to_cbor" type="fn(&self) -> Result<Vec<u8>>">
+  Serializes IntentData to CBOR bytes.
+</ParamField>
+
+<ParamField path="parse_anchor_bitcoin_fill" type="fn(&self) -> Result<AnchorBitcoinFill>">
+  Parses the data field as AnchorBitcoinFill. Returns error if intent type doesn't match.
+</ParamField>
+
+<ParamField path="parse_riscv_program" type="fn(&self) -> Result<RiscVProgramIntent>">
+  Parses the data field as RiscVProgramIntent. Returns error if intent type doesn't match.
+</ParamField>
+
+## Bitcoin Fill Intent
+
+### AnchorBitcoinFill
+
+Intent for Bitcoin L1 fills.
+
+**Location:** `src/intents.rs:87`
+
+```rust
+pub struct AnchorBitcoinFill {
+    pub bitcoin_address: Vec<u8>,
+    pub amount: U256,
+    pub max_fee: U256,
+    pub expire_by: u64,
+}
+```
+
+<ParamField path="bitcoin_address" type="Vec<u8>">
+  Bitcoin address as UTF-8 bytes
+</ParamField>
+
+<ParamField path="amount" type="U256">
+  Amount in satoshis to receive on Bitcoin
+</ParamField>
+
+<ParamField path="max_fee" type="U256">
+  Maximum fee in satoshis the user is willing to pay
+</ParamField>
+
+<ParamField path="expire_by" type="u64">
+  Expiration timestamp for the intent
+</ParamField>
+
+#### Methods
+
+<ParamField path="from_bitcoin_address" type="fn">
+  ```rust
+  pub fn from_bitcoin_address(
+      bitcoin_address: &str,
+      amount: U256,
+      max_fee: U256,
+      expire_by: u64,
+  ) -> Result<Self>
+  ```
+  
+  Creates an AnchorBitcoinFill from a Bitcoin address string.
+</ParamField>
+
+<ParamField path="to_cbor" type="fn(&self) -> Result<Vec<u8>>">
+  Serializes to CBOR bytes.
+</ParamField>
+
+<ParamField path="from_cbor" type="fn(cbor_bytes: &[u8]) -> Result<Self>">
+  Deserializes from CBOR bytes.
+</ParamField>
+
+<ParamField path="parse_bitcoin_address" type="fn(&self) -> Result<String>">
+  Parses and validates the Bitcoin address, returning it as a string.
+</ParamField>
+
+### create_anchor_bitcoin_fill_intent
+
+Helper function to create a Bitcoin fill intent.
+
+**Location:** `src/intents.rs:163`
+
+```rust
+pub fn create_anchor_bitcoin_fill_intent(
+    bitcoin_address: &str,
+    amount: U256,
+    max_fee: U256,
+    expire_by: u64,
+) -> Result<IntentData>
+```
+
+<ParamField path="bitcoin_address" type="&str">
+  Bitcoin address to receive funds
+</ParamField>
+
+<ParamField path="amount" type="U256">
+  Amount in satoshis
+</ParamField>
+
+<ParamField path="max_fee" type="U256">
+  Maximum acceptable fee
+</ParamField>
+
+<ParamField path="expire_by" type="u64">
+  Expiration timestamp
+</ParamField>
+
+**Returns:** `IntentData` ready to be submitted
+
+### Example
+
+```rust
+use core_lane::{create_anchor_bitcoin_fill_intent, U256};
+
+let intent_data = create_anchor_bitcoin_fill_intent(
+    "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
+    U256::from(100000), // 100k satoshis
+    U256::from(1000),   // max 1k sat fee
+    1735689600,         // expiry timestamp
+)?;
+
+let intent_cbor = intent_data.to_cbor()?;
+```
+
+## RISC-V Program Intent
+
+### RiscVProgramIntent
+
+Intent for executing RISC-V programs.
+
+**Location:** `src/intents.rs:95`
+
+```rust
+pub struct RiscVProgramIntent {
+    pub blob_hash: [u8; 32],
+    pub extra_data: Vec<u8>,
+}
+```
+
+<ParamField path="blob_hash" type="[u8; 32]">
+  Hash of the stored blob containing the RISC-V program
+</ParamField>
+
+<ParamField path="extra_data" type="Vec<u8>">
+  Additional data passed to the program
+</ParamField>
+
+## Intent Operations
+
+### IntentCall
+
+Enum representing decoded intent system calls.
+
+**Location:** `src/intents.rs:195`
+
+```rust
+pub enum IntentCall {
+    StoreBlob { data: Vec<u8>, expiry_time: U256 },
+    Intent { intent_data: Vec<u8>, nonce: U256 },
+    IntentFromBlob { blob_hash: B256, nonce: U256, extra_data: Vec<u8> },
+    LockIntentForSolving { intent_id: B256, data: Vec<u8> },
+    SolveIntent { intent_id: B256, data: Vec<u8> },
+    CancelIntent { intent_id: B256, data: Vec<u8> },
+    CancelIntentLock { intent_id: B256, data: Vec<u8> },
+    IsIntentSolved { intent_id: B256 },
+    CreateIntentAndLock { eip712sig: Vec<u8>, lock_data: Vec<u8> },
+    // ... other variants
+}
+```
+
+### decode_intent_calldata
+
+Decodes transaction calldata into an IntentCall.
+
+**Location:** `src/intents.rs:257`
+
+```rust
+pub fn decode_intent_calldata(calldata: &[u8]) -> Option<IntentCall>
+```
+
+<ParamField path="calldata" type="&[u8]">
+  Transaction calldata bytes
+</ParamField>
+
+**Returns:** Decoded IntentCall or None if not a valid intent call
+
+### Example: Decoding Intent Calldata
+
+```rust
+use core_lane::{decode_intent_calldata, IntentCall};
+
+let calldata = tx.input();
+if let Some(intent_call) = decode_intent_calldata(&calldata) {
+    match intent_call {
+        IntentCall::Intent { intent_data, nonce } => {
+            println!("Creating intent with nonce {}", nonce);
+        }
+        IntentCall::SolveIntent { intent_id, data } => {
+            println!("Solving intent {}", intent_id);
+        }
+        _ => {}
+    }
+}
+```
+
+## Intent Lifecycle
+
+### 1. Create Intent
+
+Send a transaction to `CoreLaneAddresses::exit_marketplace()` with:
+- Function: `intent(bytes intentData, uint256 nonce)`
+- Value: Amount to lock in the intent
+
+Intent ID is calculated as:
+```rust
+keccak256(sender || nonce || intent_data)
+```
+
+### 2. Lock Intent for Solving
+
+Solvers lock an intent to claim the right to solve it:
+- Function: `lockIntentForSolving(bytes32 intentId, bytes data)`
+- Changes status from `Submitted` to `Locked(solver_address)`
+
+### 3. Solve Intent
+
+Solver provides proof of fulfillment:
+- Function: `solveIntent(bytes32 intentId, bytes data)`
+- For `AnchorBitcoinFill`: Requires Bitcoin L1 verification
+- For `RiscVProgram`: Executes the program and validates output
+- Transfers locked value to solver
+
+### 4. Cancel Intent
+
+Creator can cancel and recover funds:
+- Function: `cancelIntent(bytes32 intentId, bytes data)`
+- Only creator can cancel
+- Cannot cancel if already solved
+
+### 5. Cancel Lock
+
+Solver can release their lock:
+- Function: `cancelIntentLock(bytes32 intentId, bytes data)`
+- Only current locker can cancel
+- Returns intent to `Submitted` status
+
+## Intent System Interface
+
+Solidity interface for the intent system:
+
+```solidity
+interface IntentSystem {
+    function storeBlob(bytes data, uint256 expiryTime) payable;
+    function intent(bytes intentData, uint256 nonce) payable returns (bytes32 intentId);
+    function intentFromBlob(bytes32 blobHash, uint256 nonce, bytes extraData) payable returns (bytes32);
+    function cancelIntent(bytes32 intentId, bytes data) payable;
+    function lockIntentForSolving(bytes32 intentId, bytes data) payable;
+    function solveIntent(bytes32 intentId, bytes data) payable;
+    function cancelIntentLock(bytes32 intentId, bytes data) payable;
+    function isIntentSolved(bytes32 intentId) view returns (bool);
+    function createIntentAndLock(bytes eip712sig, bytes lockData) returns (bytes32 intentId);
+}
+```
+
+## Complete Example
+
+```rust
+use core_lane::{
+    create_anchor_bitcoin_fill_intent,
+    IntentData, IntentStatus, IntentType,
+    StateManager, BundleStateManager,
+    U256, B256, Address,
+};
+
+// Create a Bitcoin fill intent
+let intent_data = create_anchor_bitcoin_fill_intent(
+    "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
+    U256::from(100000),
+    U256::from(1000),
+    1735689600,
+)?;
+
+// Submit via transaction to exit marketplace
+// Intent ID will be: keccak256(creator || nonce || intent_data)
+
+// Later, check intent status
+let state = StateManager::new();
+let intent_id = B256::from([/* calculated intent ID */]);
+
+if let Some(intent) = state.get_intent(&intent_id) {
+    match intent.status {
+        IntentStatus::Submitted => println!("Awaiting solver"),
+        IntentStatus::Locked(solver) => println!("Locked by {}", solver),
+        IntentStatus::Solved => println!("Intent fulfilled"),
+        IntentStatus::Cancelled => println!("Intent cancelled"),
+    }
+}
+```

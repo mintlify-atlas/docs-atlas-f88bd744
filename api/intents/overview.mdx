@@ -1,0 +1,197 @@
+---
+title: Intent System Overview
+description: Understanding Core Lane's intent-based transaction system with CBOR serialization
+---
+
+## Introduction
+
+Core Lane uses an intent-based transaction system that allows users to express desired outcomes rather than specific execution paths. Intents are submitted to the network, locked by solvers, and fulfilled when specific conditions are met.
+
+## Intent Types
+
+The system supports two primary intent types defined in the `IntentType` enum:
+
+```rust
+#[repr(u8)]
+pub enum IntentType {
+    AnchorBitcoinFill = 1,
+    RiscVProgram = 2,
+}
+```
+
+- **AnchorBitcoinFill** (type 1): Cross-chain bridge intents that lock value on Core Lane in exchange for Bitcoin payments
+- **RiscVProgram** (type 2): Programmable intents that execute RISC-V programs to determine validity conditions
+
+## Intent Data Structure
+
+All intents use the `IntentData` structure which wraps the intent type and CBOR-encoded data:
+
+```rust
+pub struct IntentData {
+    pub intent_type: IntentType,
+    pub data: Vec<u8>,
+}
+```
+
+### CBOR Serialization
+
+Intents are serialized using CBOR (Concise Binary Object Representation) with the Ciborium library:
+
+```rust
+// Serialize intent to CBOR
+let cbor_bytes = intent_data.to_cbor()?;
+
+// Deserialize CBOR back to IntentData
+let intent_data = IntentData::from_cbor(&cbor_bytes)?;
+```
+
+## Intent Lifecycle
+
+Intents progress through several states tracked by `IntentStatus`:
+
+```rust
+pub enum IntentStatus {
+    Submitted,           // Initial state after creation
+    Locked(Address),     // Locked by a solver (contains solver address)
+    Solved,              // Successfully fulfilled
+    Cancelled,           // Cancelled by creator
+}
+```
+
+### Intent State Transitions
+
+1. **Creation**: User creates intent via `intent()` or `intentFromBlob()`
+2. **Locking**: Solver calls `lockIntentForSolving()` to claim the intent
+3. **Solving**: Solver calls `solveIntent()` with proof data
+4. **Cancellation**: Creator can call `cancelIntent()` if not solved
+
+## Intent Structure
+
+The full `Intent` object stored on-chain:
+
+```rust
+pub struct Intent {
+    pub data: Bytes,                    // CBOR-encoded intent data
+    pub value: u64,                     // Locked value in wei (max ~18.4 ETH)
+    pub status: IntentStatus,           // Current status
+    pub last_command: IntentCommandType,// Last operation performed
+    pub creator: Address,               // Intent creator
+}
+```
+
+<Note>
+Intent values are currently limited to `u64::MAX` (~18.4 ETH in wei) for compatibility. Future versions will support arbitrary `U256` values.
+</Note>
+
+## Intent System Interface
+
+The intent system is accessed through a special contract address at `0x0000000000000000000000000000000000000045` (ExitMarketplace).
+
+### Core Functions
+
+#### Creating Intents
+
+```solidity
+// Submit intent with inline data
+function intent(bytes intentData, uint256 nonce) payable returns (bytes32 intentId);
+
+// Submit intent referencing stored blob
+function intentFromBlob(bytes32 blobHash, uint256 nonce, bytes extraData) payable returns (bytes32 encumberFromBlob);
+
+// Create and immediately lock intent (EIP-712 signature)
+function createIntentAndLock(bytes eip712sig, bytes lockData) returns (bytes32 intentId);
+```
+
+#### Managing Intents
+
+```solidity
+// Lock an intent for solving
+function lockIntentForSolving(bytes32 intentId, bytes data) payable;
+
+// Submit solution proof
+function solveIntent(bytes32 intentId, bytes data) payable;
+
+// Cancel an intent (creator only)
+function cancelIntent(bytes32 intentId, bytes data) payable;
+
+// Cancel solver lock
+function cancelIntentLock(bytes32 intentId, bytes data) payable;
+```
+
+#### Query Functions
+
+```solidity
+// Check if intent is solved
+function isIntentSolved(bytes32 intentId) view returns (bool);
+
+// Get current locker address
+function intentLocker(bytes32 intentId) view returns (address);
+
+// Get locked value
+function valueStoredInIntent(bytes32 intentId) view returns (uint256);
+```
+
+## Intent ID Calculation
+
+Intent IDs are deterministically calculated using the creator address, nonce, and intent data:
+
+```rust
+fn calculate_intent_id(creator: Address, nonce: u64, data: Bytes) -> B256 {
+    keccak256(abi.encodePacked(creator, nonce, data))
+}
+```
+
+## Blob Storage
+
+Large intent data can be stored as blobs to reduce transaction costs:
+
+```solidity
+// Store blob data
+function storeBlob(bytes data, uint256 expiryTime) payable;
+
+// Check if blob exists
+function blobStored(bytes32 blobHash) view returns (bool);
+
+// Extend blob expiration
+function prolongBlob(bytes32 blobHash) payable;
+```
+
+Blob hashes are calculated as `keccak256(data)`.
+
+## Creating Intents in Rust
+
+Example creating an AnchorBitcoinFill intent:
+
+```rust
+use core_lane::intents::create_anchor_bitcoin_fill_intent;
+
+let intent_data = create_anchor_bitcoin_fill_intent(
+    "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",  // Bitcoin address
+    U256::from(1_000_000_000_000_000_000u64),          // 1 ETH in wei
+    U256::from(50_000),                                 // Max fee in sats
+    1735689600,                                         // Expiry timestamp
+)?;
+
+let cbor_bytes = intent_data.to_cbor()?;
+```
+
+## Intent Commands
+
+The system tracks the last command executed on each intent:
+
+```rust
+pub enum IntentCommandType {
+    Created = 1,
+    CancelIntent = 2,
+    LockIntentForSolving = 3,
+    SolveIntent = 4,
+    CancelIntentLock = 5,
+}
+```
+
+This is used by RISC-V programs to determine the context of execution when queried via CMIO.
+
+## Next Steps
+
+- [AnchorBitcoinFill Intent Type](/api/intents/anchor-bitcoin-fill) - Cross-chain Bitcoin bridge intents
+- [RISC-V Program Intent Type](/api/intents/risc-v-programs) - Programmable intent validation

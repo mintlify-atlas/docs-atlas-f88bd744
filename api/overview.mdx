@@ -1,0 +1,206 @@
+---
+title: 'JSON-RPC API Overview'
+description: 'Core Lane JSON-RPC API reference and connection guide'
+---
+
+Core Lane implements a JSON-RPC API that is compatible with Ethereum's JSON-RPC specification, enabling developers to interact with the network using familiar tools and libraries.
+
+## Connection Details
+
+The JSON-RPC API is available via HTTP POST requests to the node's RPC endpoint.
+
+### Default Endpoint
+
+```
+http://127.0.0.1:8545
+```
+
+You can configure the host and port using command-line flags:
+
+```bash
+--http-host 127.0.0.1 --http-port 8545
+```
+
+## Authentication
+
+The JSON-RPC API does not require authentication by default. All endpoints are publicly accessible on the configured host and port.
+
+<Warning>
+For production deployments, ensure your RPC endpoint is properly secured and not exposed to untrusted networks.
+</Warning>
+
+## Request Format
+
+All JSON-RPC requests follow the standard format:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "method_name",
+  "params": [],
+  "id": 1
+}
+```
+
+<ParamField path="jsonrpc" type="string" required>
+  Protocol version (always "2.0")
+</ParamField>
+
+<ParamField path="method" type="string" required>
+  The RPC method name to call
+</ParamField>
+
+<ParamField path="params" type="array">
+  Method-specific parameters (can be empty)
+</ParamField>
+
+<ParamField path="id" type="number | string" required>
+  Request identifier for matching responses
+</ParamField>
+
+## Response Format
+
+### Success Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "result": { },
+  "id": 1
+}
+```
+
+<ResponseField name="jsonrpc" type="string">
+  Protocol version ("2.0")
+</ResponseField>
+
+<ResponseField name="result" type="any">
+  Method-specific response data
+</ResponseField>
+
+<ResponseField name="id" type="number | string">
+  Request identifier matching the request
+</ResponseField>
+
+### Error Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "error": {
+    "code": -32601,
+    "message": "Method not found"
+  },
+  "id": 1
+}
+```
+
+<ResponseField name="error" type="object">
+  Error information
+  <Expandable title="properties">
+    <ResponseField name="code" type="integer">
+      Standard JSON-RPC error code
+    </ResponseField>
+    <ResponseField name="message" type="string">
+      Human-readable error description
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Standard Error Codes
+
+| Code | Message | Description |
+|------|---------|-------------|
+| -32700 | Parse error | Invalid JSON was received |
+| -32600 | Invalid Request | The JSON sent is not a valid Request object |
+| -32601 | Method not found | The method does not exist |
+| -32602 | Invalid params | Invalid method parameter(s) |
+| -32603 | Internal error | Internal JSON-RPC error |
+
+## Using Popular Libraries
+
+### ethers.js
+
+```javascript
+import { ethers } from 'ethers';
+
+const provider = new ethers.JsonRpcProvider('http://127.0.0.1:8545');
+const blockNumber = await provider.getBlockNumber();
+console.log('Current block:', blockNumber);
+```
+
+### web3.js
+
+```javascript
+import Web3 from 'web3';
+
+const web3 = new Web3('http://127.0.0.1:8545');
+const blockNumber = await web3.eth.getBlockNumber();
+console.log('Current block:', blockNumber);
+```
+
+### curl
+
+```bash
+curl -X POST http://127.0.0.1:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_blockNumber",
+    "params": [],
+    "id": 1
+  }'
+```
+
+## Chain Information
+
+<CardGroup cols={2}>
+  <Card title="Chain ID" icon="link">
+    `1281453634` (0x4c616e42)
+  </Card>
+  <Card title="Network Name" icon="network-wired">
+    Core Lane
+  </Card>
+</CardGroup>
+
+## API Categories
+
+Core Lane's JSON-RPC API is organized into several categories:
+
+<CardGroup cols={2}>
+  <Card title="Ethereum-Compatible Methods" icon="ethereum" href="/api/ethereum-compatible">
+    Standard Ethereum RPC methods for accounts, transactions, blocks, and gas
+  </Card>
+  <Card title="Core Lane Methods" icon="bolt" href="/api/core-lane-methods">
+    Custom RPC methods specific to Core Lane features
+  </Card>
+</CardGroup>
+
+## REST Endpoints
+
+In addition to JSON-RPC, Core Lane provides several REST endpoints for raw data access:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check endpoint |
+| `/get_raw_block/:block_number` | GET | Get raw block data |
+| `/get_raw_block_delta/:block_number` | GET | Get block state delta |
+| `/get_latest_block` | GET | Get latest block information |
+| `/kv/:key` | GET | Get key-value store data |
+| `/bitcoin/wallet/balance` | GET | Get Bitcoin wallet balance |
+| `/do_poll` | POST | Trigger on-demand block scan (when enabled) |
+
+## Rate Limiting
+
+There is no built-in rate limiting. Consider implementing rate limiting at the network or application level for production deployments.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Ethereum-Compatible Methods" icon="book" href="/api/ethereum-compatible">
+    Explore standard Ethereum RPC methods
+  </Card>
+  <Card title="Core Lane Methods" icon="rocket" href="/api/core-lane-methods">
+    Discover Core Lane-specific functionality
+  </Card>
+</CardGroup>

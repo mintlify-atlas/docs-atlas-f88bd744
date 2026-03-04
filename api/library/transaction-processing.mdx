@@ -1,0 +1,296 @@
+---
+title: "Transaction Processing"
+description: "Transaction execution and processing API"
+---
+
+## Overview
+
+The transaction processing module handles execution of Core Lane transactions, including transfers, intent operations, and special contract calls.
+
+## Core Functions
+
+### execute_transaction
+
+Executes a Core Lane transaction within a processing context.
+
+**Location:** `src/transaction.rs:151`
+
+```rust
+pub fn execute_transaction<T: ProcessingContext>(
+    tx: &TxEnvelope,
+    sender: Address,
+    bundle_state: &mut BundleStateManager,
+    state: &mut T,
+    block_timestamp: u64,
+) -> Result<ExecutionResult>
+```
+
+<ParamField path="tx" type="&TxEnvelope">
+  Transaction envelope to execute (supports Legacy, EIP-1559, EIP-2930, EIP-4844)
+</ParamField>
+
+<ParamField path="sender" type="Address">
+  Address of the transaction sender (recovered from signature)
+</ParamField>
+
+<ParamField path="bundle_state" type="&mut BundleStateManager">
+  Bundle state manager to apply transaction changes
+</ParamField>
+
+<ParamField path="state" type="&mut T">
+  Processing context implementing ProcessingContext trait
+</ParamField>
+
+<ParamField path="block_timestamp" type="u64">
+  Timestamp of the current block
+</ParamField>
+
+**Returns:** `Result<ExecutionResult>` containing execution outcome
+
+### Example
+
+```rust
+use core_lane::{execute_transaction, CoreLaneStateForLib};
+use core_lane::{StateManager, BundleStateManager};
+use alloy_consensus::TxEnvelope;
+use alloy_rlp::Decodable;
+
+let mut state = CoreLaneStateForLib::new(
+    StateManager::new(),
+    bitcoin_client_read,
+    bitcoin_client_write,
+    bitcoin::Network::Regtest
+);
+
+let mut bundle = BundleStateManager::new();
+let tx_bytes = hex::decode("...")?;
+let tx = TxEnvelope::decode(&mut tx_bytes.as_slice())?;
+let sender = tx.recover_signer()?;
+
+let result = execute_transaction(
+    &tx,
+    sender,
+    &mut bundle,
+    &mut state,
+    1234567890
+)?;
+
+if result.success {
+    state.state_manager_mut().apply_changes(bundle);
+}
+```
+
+### get_transaction_input_bytes
+
+Extracts calldata from a transaction envelope.
+
+**Location:** `src/transaction.rs:74`
+
+```rust
+pub fn get_transaction_input_bytes(tx: &TxEnvelope) -> Vec<u8>
+```
+
+<ParamField path="tx" type="&TxEnvelope">
+  Transaction envelope
+</ParamField>
+
+**Returns:** Transaction calldata bytes
+
+### get_transaction_nonce
+
+Extracts the nonce from a transaction.
+
+**Location:** `src/transaction.rs:85`
+
+```rust
+pub fn get_transaction_nonce(tx: &TxEnvelope) -> u64
+```
+
+<ParamField path="tx" type="&TxEnvelope">
+  Transaction envelope
+</ParamField>
+
+**Returns:** Transaction nonce as u64
+
+## ProcessingContext Trait
+
+Trait for contexts that can process transactions. Allows both the node and external sequencers to process transactions.
+
+**Location:** `src/transaction.rs:96`
+
+```rust
+pub trait ProcessingContext {
+    fn state_manager(&self) -> &StateManager;
+    fn state_manager_mut(&mut self) -> &mut StateManager;
+    fn bitcoin_client_read(&self) -> Option<Arc<dyn BitcoinRpcReadClient>>;
+    fn bitcoin_network(&self) -> bitcoin::Network;
+    fn handle_cmio_query(
+        &mut self,
+        message: CmioMessage,
+        current_intent_id: Option<B256>,
+    ) -> Option<CmioMessage>;
+}
+```
+
+### Methods
+
+<ParamField path="state_manager" type="fn(&self) -> &StateManager">
+  Returns a reference to the state manager.
+</ParamField>
+
+<ParamField path="state_manager_mut" type="fn(&mut self) -> &mut StateManager">
+  Returns a mutable reference to the state manager.
+</ParamField>
+
+<ParamField path="bitcoin_client_read" type="fn(&self) -> Option<Arc<dyn BitcoinRpcReadClient>>">
+  Returns the Bitcoin RPC read client if available.
+</ParamField>
+
+<ParamField path="bitcoin_network" type="fn(&self) -> bitcoin::Network">
+  Returns the Bitcoin network (mainnet, testnet, regtest, etc.).
+</ParamField>
+
+<ParamField path="handle_cmio_query" type="fn">
+  Handles CMIO queries from Cartesi machine execution.
+  
+  **Parameters:**
+  - `message`: CMIO message from the machine
+  - `current_intent_id`: Optional intent ID being processed
+  
+  **Returns:** CMIO response message
+</ParamField>
+
+## ExecutionResult
+
+Result of transaction execution.
+
+**Location:** `src/transaction.rs:139`
+
+```rust
+pub struct ExecutionResult {
+    pub success: bool,
+    pub gas_used: U256,
+    pub gas_refund: U256,
+    pub output: Bytes,
+    pub logs: Vec<String>,
+    pub error: Option<String>,
+}
+```
+
+### Fields
+
+<ParamField path="success" type="bool">
+  Whether the transaction executed successfully
+</ParamField>
+
+<ParamField path="gas_used" type="U256">
+  Amount of gas consumed during execution
+</ParamField>
+
+<ParamField path="gas_refund" type="U256">
+  Amount of gas refunded
+</ParamField>
+
+<ParamField path="output" type="Bytes">
+  Transaction output data (return value for calls)
+</ParamField>
+
+<ParamField path="logs" type="Vec<String>">
+  Execution log messages
+</ParamField>
+
+<ParamField path="error" type="Option<String>">
+  Error message if execution failed
+</ParamField>
+
+## CoreLaneAddresses
+
+Special addresses for Core Lane operations.
+
+**Location:** `src/transaction.rs:109`
+
+### Methods
+
+<ParamField path="burn" type="fn() -> Address">
+  Returns the burn address: `0x0000000000000000000000000000000000000666`
+  
+  Used for burning tokens to mint on Core Lane.
+</ParamField>
+
+<ParamField path="exit_marketplace" type="fn() -> Address">
+  Returns the exit marketplace address: `0x0000000000000000000000000000000000000045`
+  
+  Used for intent operations (create, lock, solve, cancel).
+</ParamField>
+
+<ParamField path="cartesi_http_runner" type="fn() -> Address">
+  Returns the Cartesi HTTP runner address: `0x0000000000000000000000000000000000000042`
+  
+  Used for executing RISC-V programs via Cartesi.
+</ParamField>
+
+### Example
+
+```rust
+use core_lane::{CoreLaneAddresses, Address};
+
+let exit_marketplace = CoreLaneAddresses::exit_marketplace();
+let burn_address = CoreLaneAddresses::burn();
+
+// Check if transaction is to exit marketplace
+if tx.to() == Some(exit_marketplace) {
+    // Handle intent operation
+}
+```
+
+## Transaction Validation
+
+Transaction processing includes automatic validation:
+
+### Nonce Validation
+
+Nonces are validated to prevent replay attacks and ensure transaction ordering:
+
+```rust
+let tx_nonce = get_transaction_nonce(tx);
+let expected_nonce = bundle_state.get_nonce(state.state_manager(), sender);
+
+if U256::from(tx_nonce) != expected_nonce {
+    return Ok(ExecutionResult {
+        success: false,
+        error: Some(format!(
+            "Invalid nonce: expected {}, got {}",
+            expected_nonce, tx_nonce
+        )),
+        // ...
+    });
+}
+```
+
+### Balance Validation
+
+Sufficient balance is checked before transfers:
+
+```rust
+if bundle_state.get_balance(state.state_manager(), sender) < value {
+    return Ok(ExecutionResult {
+        success: false,
+        error: Some("Insufficient balance".to_string()),
+        // ...
+    });
+}
+```
+
+## Special Transaction Types
+
+### Intent Transactions
+
+Transactions to `CoreLaneAddresses::exit_marketplace()` trigger intent operations. See [Intent System API](/api/library/intents) for details.
+
+### Cartesi Transactions
+
+Transactions to `CoreLaneAddresses::cartesi_http_runner()` execute RISC-V programs (requires `cartesi-runner` feature).
+
+### Burn Transactions
+
+Transactions to `CoreLaneAddresses::burn()` with proper formatting mint tokens on Core Lane. See block processing documentation for details.

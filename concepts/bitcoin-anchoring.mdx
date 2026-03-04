@@ -1,0 +1,393 @@
+---
+title: 'Bitcoin Anchoring'
+description: 'How Core Lane anchors transaction data to Bitcoin for security and availability'
+---
+
+## Overview
+
+Core Lane uses Bitcoin as a data availability (DA) layer, embedding transaction data directly into Bitcoin blocks using Taproot. This provides:
+
+- **Security** - Inherits Bitcoin's proof-of-work security
+- **Availability** - Data stored on Bitcoin's global network
+- **Verifiability** - Anyone can verify Core Lane state from Bitcoin
+
+## Taproot Data Availability
+
+Core Lane leverages Bitcoin's Taproot upgrade to embed data efficiently using the **commit-reveal pattern**.
+
+### Commit-Reveal Pattern
+
+Data is published to Bitcoin in two transactions submitted as an atomic package:
+
+<Steps>
+  <Step title="Commit Transaction">
+    Creates a Taproot output with data committed in the script tree
+  </Step>
+  <Step title="Reveal Transaction">
+    Immediately spends the Taproot output, exposing the data on-chain
+  </Step>
+</Steps>
+
+Both transactions are submitted together using Bitcoin Core's `submitpackage` RPC (src/taproot_da.rs:548-603), ensuring atomic inclusion in the same block.
+
+## Data Formats
+
+Core Lane supports two data format prefixes:
+
+### CORE_LANE - Single Transaction
+
+For individual transactions (src/bitcoin_block.rs:304-306):
+
+```
+CORE_LANE || <RLP-encoded Ethereum transaction>
+```
+
+Extracted from Taproot envelopes during block scanning.
+
+### CORE_BNDL - Transaction Bundles
+
+For bundled transactions with compression (src/taproot_da.rs:618-645):
+
+```
+CORE_BNDL || <CBOR-encoded bundle>
+```
+
+**Bundle CBOR Schema** (src/block.rs:165-171):
+
+```rust
+[
+  type,                      // u8: 0=no compression, 1=brotli
+  decompressed_length,       // u32: size of decompressed data
+  valid_for_block,          // u64: bundle validity block
+  flash_loan_amount,        // 32 bytes: U256
+  flash_loaner_address,     // 20 bytes: Address
+  sequencer_payment_recipient, // 20 bytes: Address
+  compressed_transactions,  // bytes: brotli-compressed CBOR array
+  signature,                // optional 65 bytes: secp256k1 recoverable sig
+  marker                    // optional u8: bundle position marker
+]
+```
+
+<Info>
+Brotli compression typically achieves 60-80% size reduction on transaction bundles, reducing Bitcoin fees significantly.
+</Info>
+
+## Taproot Envelope Construction
+
+The envelope script embeds data using Bitcoin script opcodes (src/taproot_da.rs:922-936):
+
+```rust
+fn create_taproot_envelope_script(&self, data: &[u8]) -> Result<ScriptBuf> {
+    let mut script = Builder::new();
+    script = script.push_opcode(OP_FALSE).push_opcode(OP_IF);
+    
+    // Add data in chunks of 520 bytes (Bitcoin script push limit)
+    for chunk in data.chunks(520) {
+        script = script.push_slice(chunk);
+    }
+    
+    script = script.push_opcode(OP_ENDIF).push_opcode(OP_TRUE);
+    Ok(script.into_script())
+}
+```
+
+**Script Pattern**: `OP_FALSE OP_IF <data_chunks> OP_ENDIF OP_TRUE`
+
+- `OP_FALSE OP_IF` - Creates unexecutable branch (data never executed)
+- Data chunks - Payload split into ≤520 byte pushes
+- `OP_ENDIF OP_TRUE` - Script evaluates to true (spendable)
+
+## Transaction Submission Process
+
+### Step 1: Wallet Sync
+
+BDK wallet is loaded and synced (src/taproot_da.rs:249-351):
+
+- **Regtest**: Syncs via Bitcoin Core RPC using `bdk_bitcoind_rpc::Emitter`
+- **Other networks**: Syncs via Electrum using `bdk_electrum::BdkElectrumClient`
+
+### Step 2: Fee Calculation
+
+Optimal fee rate is calculated (src/taproot_da.rs:155-228):
+
+```rust
+async fn calculate_optimal_fee_rate(&self) -> Result<u64> {
+    // Get min relay fee from Bitcoin node
+    let min_relay_fee_sat_vb = /* from getnetworkinfo */;
+    
+    // Get market fee estimate
+    let sat_per_vb = /* from estimatesmartfee */;
+    
+    // Cap between min relay and 50 sat/vB
+    let capped_sat_per_vb = sat_per_vb.max(min_relay_fee_sat_vb).min(50);
+    
+    Ok(capped_sat_per_vb.clamp(1, 10)) // Force to 1-10 range for testing
+}
+```
+
+<Note>
+The reveal transaction fee is calculated exactly based on payload size (src/taproot_da.rs:36-94) to avoid overpaying.
+</Note>
+
+### Step 3: Build Commit Transaction
+
+BDK constructs and signs the commit transaction (src/taproot_da.rs:413-457):
+
+```rust
+let mut tx_builder = wallet.build_tx();
+tx_builder.fee_rate(fee_rate);
+tx_builder.add_recipient(
+    taproot_address.script_pubkey(),
+    Amount::from_sat(min_taproot_output),
+);
+
+let mut psbt = tx_builder.finish()?;
+wallet.sign(&mut psbt, SignOptions::default())?;
+let commit_tx = psbt.extract_tx()?;
+```
+
+### Step 4: Build Reveal Transaction
+
+Reveal transaction immediately spends the Taproot output (src/taproot_da.rs:522-544):
+
+```rust
+let mut reveal_tx = Transaction {
+    version: bitcoin::transaction::Version::TWO,
+    lock_time: bitcoin::absolute::LockTime::ZERO,
+    input: vec![bitcoin::TxIn {
+        previous_output: bitcoin::OutPoint {
+            txid: commit_txid,
+            vout: taproot_vout_index as u32,
+        },
+        script_sig: ScriptBuf::new(),
+        sequence: bitcoin::Sequence::MAX,
+        witness: Witness::new(),
+    }],
+    output: vec![bitcoin::TxOut {
+        value: bitcoin::Amount::from_sat(0),
+        script_pubkey: op_return_script, // OP_RETURN "CORELANE"
+    }],
+};
+
+// Add witness to reveal the envelope
+let mut witness = Witness::new();
+witness.push(envelope_script.as_bytes());
+witness.push(&control_block);
+reveal_tx.input[0].witness = witness;
+```
+
+### Step 5: Submit Package
+
+Both transactions submitted atomically (src/taproot_da.rs:548-603):
+
+```rust
+let package_txs = vec![
+    serde_json::json!(commit_tx_hex),
+    serde_json::json!(reveal_final_hex),
+];
+
+let package_result = self.rpc_client
+    .call("submitpackage", &[serde_json::json!(package_txs)])?;
+```
+
+<Warning>
+Package submission requires Bitcoin Core v22.0+ with `submitpackage` RPC support.
+</Warning>
+
+## Data Extraction
+
+Core Lane nodes scan Bitcoin blocks to extract embedded data.
+
+### Block Processing Flow
+
+See src/bitcoin_block.rs:19-138:
+
+```rust
+pub fn process_bitcoin_block(
+    bitcoin_client: Arc<dyn BitcoinRpcReadClient>,
+    height: u64,
+) -> Result<CoreLaneBlockParsed> {
+    let block = bitcoin_client.get_block_by_hash_hex(&hash_hex)?;
+    
+    let mut core_lane_block = CoreLaneBlockParsed::new(
+        bitcoin_block_hash_bytes,
+        bitcoin_block_timestamp,
+        height,
+        parent_hash,
+    );
+    
+    // Pass 1: Extract burns (P2WSH + OP_RETURN pattern)
+    for tx in block.txdata.iter() {
+        if let Some((payload, burn_value)) = extract_burn_payload_from_tx(tx) {
+            core_lane_block.add_burn(process_bitcoin_burn(payload, burn_value)?);
+        }
+    }
+    
+    // Pass 2: Extract CORE_LANE transactions
+    for tx in block.txdata.iter() {
+        if let Some(lane_tx) = extract_core_lane_transaction(tx) {
+            core_lane_block.add_bundle_from_single_tx(tx, sender, lane_tx);
+        }
+    }
+    
+    // Pass 3: Extract CORE_BNDL bundles
+    for tx in block.txdata.iter() {
+        if let Some(bundle_data) = extract_core_bndl_transaction(tx) {
+            let cbor_bundle = CoreLaneBundleCbor::from_cbor(&bundle_data)?;
+            core_lane_block.add_bundle_from_cbor(cbor_bundle)?;
+        }
+    }
+    
+    Ok(core_lane_block)
+}
+```
+
+### Envelope Data Extraction
+
+Generic envelope extraction (src/bitcoin_block.rs:310-449):
+
+```rust
+fn extract_envelope_data_with_prefix(script: &Script, prefix: &[u8]) -> Option<Vec<u8>> {
+    // 1. Verify script starts with OP_FALSE/OP_IF
+    // 2. Collect all push operations between OP_IF and OP_ENDIF
+    // 3. Verify script ends with OP_ENDIF/OP_TRUE
+    // 4. Concatenate all push data
+    // 5. Check for prefix match
+    // 6. Remove padding and return payload
+}
+```
+
+## Bundle Signatures
+
+Bundles can be signed for authenticity verification (src/block.rs:492-635):
+
+### Signing Process
+
+```rust
+pub fn sign(&mut self, secret_key: &SecretKey) -> anyhow::Result<[u8; 65]> {
+    let secp = Secp256k1::new();
+    
+    // Get hash with signature zeroed
+    let hash = self.get_signing_hash()?;
+    let message = Message::from_digest(hash);
+    
+    // Sign with recovery
+    let signature = secp.sign_ecdsa_recoverable(&message, secret_key);
+    
+    // Serialize to 65 bytes [r || s || recovery_id]
+    let (recovery_id, signature_bytes) = signature.serialize_compact();
+    let mut sig_array = [0u8; 65];
+    sig_array[..64].copy_from_slice(&signature_bytes);
+    sig_array[64] = recovery_id.to_i32() as u8;
+    
+    self.signature = Some(sig_array);
+    Ok(sig_array)
+}
+```
+
+### Address Recovery
+
+Recover signer's Ethereum address from bundle signature (src/block.rs:596-634):
+
+```rust
+pub fn recover_signer_address(&self) -> anyhow::Result<Address> {
+    let signature = self.signature.ok_or(anyhow!("No signature"))?;
+    let hash = self.get_signing_hash()?;
+    let message = Message::from_digest(hash);
+    
+    // Recover public key
+    let recovery_id = RecoveryId::from_i32(signature[64] as i32)?;
+    let sig = RecoverableSignature::from_compact(&signature[..64], recovery_id)?;
+    let public_key = secp.recover_ecdsa(&message, &sig)?;
+    
+    // Convert to Ethereum address
+    let public_key_uncompressed = public_key.serialize_uncompressed();
+    let public_key_bytes = &public_key_uncompressed[1..];
+    let hash = Keccak256::new().chain_update(public_key_bytes).finalize();
+    
+    Ok(Address::from_slice(&hash[12..]))
+}
+```
+
+## Compression
+
+Brotli compression reduces bundle size significantly (src/block.rs:428-439):
+
+```rust
+let params = brotli::enc::BrotliEncoderParams {
+    quality: 6,        // Balanced compression/speed
+    lgwin: 22,         // 4MB window size
+    ..Default::default()
+};
+brotli::BrotliCompress(
+    &mut uncompressed_transactions.as_slice(),
+    &mut compressed_transactions,
+    &params,
+)?;
+```
+
+**Decompression Protection** (src/block.rs:12-14, 219-225):
+
+```rust
+const MAX_DECOMPRESSED_SIZE: u32 = 128 * 1024 * 1024; // 128 MB
+
+if decompressed_length > MAX_DECOMPRESSED_SIZE {
+    return Err(anyhow!(
+        "Decompressed length {} exceeds maximum of {} bytes (128MB)",
+        decompressed_length, MAX_DECOMPRESSED_SIZE
+    ));
+}
+```
+
+<Info>
+Decompression bombs are prevented by enforcing a 128 MB limit on decompressed data.
+</Info>
+
+## Bitcoin Burn Mechanism
+
+Cross-chain burns for minting Core Lane tokens (src/bitcoin_block.rs:183-234):
+
+### Hybrid P2WSH + OP_RETURN Pattern
+
+1. **P2WSH output** - Unspendable witness script hash (burns BTC)
+2. **OP_RETURN output** - Contains `BRN1 || chain_id || eth_address`
+
+### Burn Processing
+
+```rust
+fn process_bitcoin_burn(
+    payload: Vec<u8>,
+    burn_value: u64,
+    txid: String,
+) -> Result<CoreLaneBurn> {
+    // Parse BRN1 payload
+    let chain_id = u32::from_be_bytes([payload[4..8]]);
+    let eth_address = Address::from_slice(&payload[8..28]);
+    
+    // Verify chain ID (1281453634 for Core Lane, 1 for Ethereum)
+    if chain_id == 1281453634 || chain_id == 1 {
+        // Convert sats to wei: 1 sat = 10^10 wei
+        let conversion_factor = U256::from(10_000_000_000u64);
+        let mint_amount = U256::from(burn_value) * conversion_factor;
+        
+        Ok(CoreLaneBurn::new(mint_amount, eth_address))
+    } else {
+        Err(anyhow!("Invalid chain ID"))
+    }
+}
+```
+
+<Warning>
+Burned Bitcoin is permanently unrecoverable. Ensure the correct chain ID and address before burning.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Taproot DA Details" icon="code" href="/concepts/taproot-da">
+    Deep dive into Taproot DA mechanism
+  </Card>
+  <Card title="Transaction Processing" icon="gears" href="/concepts/transaction-processing">
+    See how transactions flow through the system
+  </Card>
+</CardGroup>

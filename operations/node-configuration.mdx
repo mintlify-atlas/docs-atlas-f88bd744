@@ -1,0 +1,469 @@
+---
+title: Node Configuration
+description: Complete reference for configuring Core Lane nodes
+---
+
+## Overview
+
+Core Lane nodes support multiple deployment modes with extensive configuration options. This reference covers all configuration parameters extracted from the source code.
+
+## Command-Line Arguments
+
+### Global Options
+
+Available across all commands:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `--plain` | flag | false | Plain output mode (no emojis, machine-readable) |
+| `--data-dir` | string | `.` | Data directory for wallet databases and state |
+
+## Node Operation Modes
+
+### Standard Node (`start`)
+
+Runs a full Core Lane node that anchors to Bitcoin.
+
+```bash
+core-lane-node start \
+  --bitcoin-rpc-read-url http://127.0.0.1:18443 \
+  --bitcoin-rpc-read-user user \
+  --bitcoin-rpc-read-password <password> \
+  --mnemonic-file /path/to/mnemonic.txt \
+  --http-host 0.0.0.0 \
+  --http-port 8545
+```
+
+#### Bitcoin RPC Configuration
+
+**Read Operations** (required):
+- `--bitcoin-rpc-read-url`: Bitcoin RPC URL for reading blockchain data (default: `http://127.0.0.1:18443`)
+- `--bitcoin-rpc-read-user`: Bitcoin RPC username (default: `user`)
+- `--bitcoin-rpc-read-password`: Bitcoin RPC password (required)
+
+**Write Operations** (optional):
+- `--bitcoin-rpc-write-url`: Separate URL for wallet operations (defaults to read URL)
+- `--bitcoin-rpc-write-user`: Username for write operations (defaults to read user)
+- `--bitcoin-rpc-write-password`: Password for write operations (defaults to read password)
+
+<Warning>
+  Separating read and write RPC endpoints allows you to use a public Bitcoin node for reading while keeping wallet operations on a trusted local node.
+</Warning>
+
+#### Chain Synchronization
+
+- `--start-block`: Bitcoin block height to start processing from (optional)
+  - If not specified, node resumes from last processed block
+  - Only used on fresh start; ignored if state exists on disk
+- `--electrum-url`: Electrum server URL for mainnet/testnet/signet (optional)
+  - Example: `ssl://electrum.blockstream.info:50002`
+  - Not required for regtest networks
+
+#### HTTP Server
+
+- `--http-host`: HTTP server bind address (default: `127.0.0.1`)
+  - Use `0.0.0.0` to accept connections from all interfaces
+- `--http-port`: HTTP server port (default: `8545`)
+
+#### Security & Authentication
+
+**Mnemonic Configuration** (required):
+
+Three methods to provide the mnemonic, checked in priority order:
+
+1. **File (recommended)**: `--mnemonic-file /path/to/file`
+   - Most secure, not visible in process listings
+2. **Environment variable**: `CORE_LANE_MNEMONIC="your words here"`
+   - Secure for containerized environments
+3. **Command-line flag**: `--mnemonic "your words here"`
+   - **Not recommended**: visible in process list and shell history
+
+<Warning>
+  Never use `--mnemonic` flag in production. Use `--mnemonic-file` or environment variable to prevent exposure of sensitive keys.
+</Warning>
+
+#### Sequencer Configuration
+
+- `--sequencer-rpc-url`: Sequencer RPC endpoint (optional)
+  - When set, `eth_sendRawTransaction` forwards transactions to this endpoint
+  - Used for submitting transactions to a centralized sequencer
+- `--sequencer-address`: Sequencer address for priority fees (hex format)
+  - Default: `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266` (first Anvil address)
+  - **Important**: Change this in production environments
+
+#### Polling Mode
+
+- `--on-demand-polling`: Enable on-demand polling mode (flag)
+  - Disables continuous block scanning
+  - Blocks are only processed when `POST /do_poll` is called
+  - Useful for testing or manual control
+
+### Derived Node (`derived-start`)
+
+Runs a derived node that reads bundles from another Core Lane node via DA.
+
+```bash
+core-lane-node derived-start \
+  --core-rpc-url http://127.0.0.1:8545 \
+  --chain-id 1281453634 \
+  --derived-da-address 0x0000000000000000000000000000000000000046 \
+  --http-host 0.0.0.0 \
+  --http-port 8546
+```
+
+#### Configuration Parameters
+
+- `--core-rpc-url`: Upstream Core Lane JSON-RPC URL (required)
+- `--chain-id`: Chain ID for the derived chain (default: `1281453634`)
+- `--derived-da-address`: Data availability contract address (required)
+- `--start-block`: Starting block number (default: `0`)
+- `--http-host`: HTTP bind address (default: `127.0.0.1`)
+- `--http-port`: HTTP port (default: `8545`)
+- `--sequencer-rpc-url`: Forward endpoint for transactions (optional)
+- `--sequencer-address`: Sequencer fee recipient address (optional)
+- `--on-demand-polling`: Enable manual polling mode (flag)
+
+### Espresso Derived Node (`derived-espresso-start`)
+
+Runs a derived node that reads bundles from Espresso.
+
+```bash
+core-lane-node derived-espresso-start \
+  --espresso-base-url https://query.decaf.testnet.espresso.network/v1 \
+  --espresso-namespace 1281453637 \
+  --core-lane-rpc-url http://127.0.0.1:8545 \
+  --chain-id 1281453634 \
+  --http-host 0.0.0.0 \
+  --http-port 8547
+```
+
+#### Configuration Parameters
+
+- `--espresso-base-url`: Espresso query service URL (default: `https://query.decaf.testnet.espresso.network/v1`)
+- `--espresso-namespace`: Namespace ID for Core Lane bundles (default: `1281453637`)
+  - Default is "LanE" as big-endian u32: `0x4C616E45`
+- `--core-lane-rpc-url`: Upstream Core Lane RPC for reorg detection (required)
+- `--chain-id`: Chain ID (default: `1281453634`)
+- `--start-block`: Starting Core Lane block (optional)
+- `--start-anchor`: Starting Espresso anchor height (optional)
+- `--http-host`: HTTP bind address (default: `127.0.0.1`)
+- `--http-port`: HTTP port (default: `8545`)
+- `--sequencer-rpc-url`: Transaction forwarding endpoint (optional)
+- `--sequencer-address`: Fee recipient address (optional)
+
+### Bitcoin Cache Server (`bitcoin-cache`)
+
+Runs a caching proxy for Bitcoin RPC with block archiving.
+
+```bash
+core-lane-node bitcoin-cache \
+  --host 0.0.0.0 \
+  --port 8332 \
+  --cache-dir ./bitcoin-cache \
+  --bitcoin-rpc-url http://upstream-node:8332 \
+  --bitcoin-rpc-user user \
+  --bitcoin-rpc-password password
+```
+
+#### Configuration Parameters
+
+- `--host`: Bind address (default: `127.0.0.1`)
+- `--port`: Bind port (default: `8332`)
+- `--cache-dir`: Local cache directory (default: `./bitcoin-cache`)
+- `--bitcoin-rpc-url`: Upstream Bitcoin RPC URL (required)
+- `--bitcoin-rpc-user`: Upstream RPC username (default: empty)
+- `--bitcoin-rpc-password`: Upstream RPC password (default: empty)
+- `--no-rpc-auth`: Disable RPC authentication (flag)
+- `--block-archive`: HTTP block archive URL (default: `http://144.76.56.210/blocks`)
+- `--starting-block-count`: Initial block height (optional)
+- `--disable-archive-fetch`: Disable fetching from archive (flag)
+
+#### S3 Configuration
+
+- `--s3-bucket`: S3 bucket name for uploading cached blocks (optional)
+- `--s3-region`: AWS region (default: `us-east-1`)
+- `--s3-endpoint`: Custom S3 endpoint URL (optional)
+
+<Warning>
+  S3 credentials (`S3_ACCESS_KEY` and `S3_SECRET_KEY`) are passed via environment variables, not command-line arguments, to prevent exposure in process listings.
+</Warning>
+
+## Wallet Management Commands
+
+### Create Wallet
+
+Creates a BDK wallet for a specific network:
+
+```bash
+core-lane-node create-wallet \
+  --network mainnet \
+  --electrum-url ssl://electrum.blockstream.info:50002
+```
+
+- `--network`: Network type (bitcoin, testnet, testnet4, signet, regtest) (default: `regtest`)
+- `--mnemonic`: Optional mnemonic to restore wallet (12 or 24 words)
+- `--mnemonic-only`: Generate mnemonic without creating database file (flag)
+- `--electrum-url`: Electrum server for initial sync (mainnet/testnet/signet only)
+
+### Get Address
+
+Retrieve the next receiving address from wallet:
+
+```bash
+core-lane-node get-address \
+  --network regtest \
+  --mnemonic-file /path/to/mnemonic.txt
+```
+
+- `--network`: Network type (default: `regtest`)
+- `--mnemonic` or `--mnemonic-file`: Wallet credentials (required)
+
+### Get Bitcoin Balance
+
+Check wallet balance:
+
+```bash
+core-lane-node get-bitcoin-balance \
+  --network regtest \
+  --mnemonic-file /path/to/mnemonic.txt \
+  --rpc-url http://127.0.0.1:18443 \
+  --rpc-user bitcoin \
+  --rpc-password password
+```
+
+- `--network`: Network type (default: `regtest`)
+- `--mnemonic` or `--mnemonic-file`: Wallet credentials
+- `--electrum-url`: Electrum server (mainnet/testnet/signet)
+- `--rpc-url`: Bitcoin RPC URL (regtest) (default: `http://127.0.0.1:18443`)
+- `--rpc-user`: Bitcoin RPC username (regtest)
+- `--rpc-password`: Bitcoin RPC password (regtest)
+
+## Transaction Commands
+
+### Burn BTC
+
+Burn Bitcoin to mint tokens on Core Lane:
+
+```bash
+core-lane-node burn \
+  --burn-amount 500000 \
+  --chain-id 1281453634 \
+  --eth-address 0x1234567890123456789012345678901234567890 \
+  --network regtest \
+  --mnemonic-file /path/to/mnemonic.txt \
+  --rpc-password bitcoin123
+```
+
+- `--burn-amount`: Amount in satoshis (required)
+- `--chain-id`: Target chain ID (required)
+- `--eth-address`: Ethereum address to receive minted tokens (required)
+- `--network`: Bitcoin network (default: `regtest`)
+- `--mnemonic` or `--mnemonic-file`: Wallet credentials
+- `--rpc-url`: Bitcoin RPC URL (regtest) (default: `http://127.0.0.1:18443`)
+- `--rpc-user`: Bitcoin RPC username (regtest) (default: `bitcoin`)
+- `--rpc-password`: Bitcoin RPC password (regtest)
+- `--electrum-url`: Electrum server (mainnet/testnet/signet)
+
+### Send Transaction
+
+Broadcast a signed Bitcoin transaction:
+
+```bash
+core-lane-node send-transaction \
+  --raw-tx-hex <hex> \
+  --network regtest \
+  --mnemonic-file /path/to/mnemonic.txt
+```
+
+### Send Bundle
+
+Broadcast a bundle of transactions:
+
+```bash
+core-lane-node send-bundle \
+  --raw-tx-hex <hex1> \
+  --raw-tx-hex <hex2> \
+  --network regtest \
+  --mnemonic-file /path/to/mnemonic.txt \
+  --marker standard
+```
+
+- `--raw-tx-hex`: Transaction hex (can be specified multiple times)
+- `--sequencer-payment-recipient`: Payment address (optional)
+- `--marker`: Bundle marker type: "head" or "standard" (default: `standard`)
+
+## Environment Variables
+
+### Runtime Configuration
+
+- `CORE_LANE_MNEMONIC`: Wallet mnemonic phrase
+  - Used when no `--mnemonic` or `--mnemonic-file` provided
+  - Recommended for Docker/container environments
+
+- `RUST_LOG`: Logging level configuration
+  - Examples: `info`, `debug`, `warn`, `error`
+  - Module-specific: `RUST_LOG=core_lane=debug,info`
+
+### Bitcoin Cache Server (entrypoint script)
+
+- `BITCOIN_CACHE_HOST`: Cache server hostname (default: `127.0.0.1`)
+- `BITCOIN_CACHE_PORT`: Cache server port (default: `8332`)
+- `BITCOIN_CACHE_PROTOCOL`: Protocol (http/https) (default: `http`)
+- `BITCOIN_UPSTREAM_RPC_URL`: Upstream Bitcoin RPC
+- `BLOCK_ARCHIVE_URL`: Block archive endpoint
+- `STARTING_BLOCK_COUNT`: Initial block count
+- `DISABLE_ARCHIVE_FETCH`: Disable archive fetching (true/false)
+
+### S3 Storage
+
+- `S3_BUCKET`: S3 bucket name
+- `S3_REGION`: AWS region (default: `us-east-1`)
+- `S3_ENDPOINT`: Custom S3 endpoint
+- `S3_ACCESS_KEY`: AWS access key ID
+- `S3_SECRET_KEY`: AWS secret access key
+
+### Core Lane RPC Server
+
+- `DATA_DIR`: Data directory path (default: `/data`)
+- `CACHE_DIR`: Cache directory path (default: `/cache`)
+- `HTTP_HOST`: HTTP bind address (default: `0.0.0.0`)
+- `HTTP_PORT`: HTTP port (default: `8545`)
+- `ELECTRUM_URL`: Electrum server URL
+- `NETWORK`: Bitcoin network (mainnet, testnet4, signet, regtest)
+
+### Derived Node Configuration
+
+- `CHAIN_ID`: Chain identifier
+- `DERIVED_DA_ADDRESS`: DA contract address
+- `START_BLOCK`: Starting block number
+- `LANE_LAYER_SNAPSHOT_DIR`: Snapshot directory for derived nodes
+- `CORE_RPC_URL`: Upstream Core Lane RPC (default: `https://rpc.lanelayer.com`)
+
+### Service Control
+
+- `ONLY_START`: Control which services to start
+  - Values: `bitcoin-cache`, `core-lane`, `derive-node`
+  - When unset, all configured services start
+
+## Data Directory Structure
+
+Core Lane stores persistent state in the data directory:
+
+```
+<data-dir>/
+├── blocks/              # Per-block state snapshots
+│   ├── 0               # Genesis state
+│   ├── 1               # Block 1 state
+│   └── ...
+├── metastate/          # Fee manager and sequencer config per block
+│   ├── 0
+│   ├── 1
+│   └── ...
+├── deltas/             # State changes per block
+│   ├── 1
+│   └── ...
+├── chain_index/        # Block metadata for restoration
+│   ├── 1
+│   └── ...
+├── tip                 # Current chain tip (atomic commit marker)
+├── wallet_regtest.sqlite3      # BDK wallet (per network)
+├── wallet_mainnet.sqlite3
+└── wallet_testnet4.sqlite3
+```
+
+<Warning>
+  The `tip` file is the source of truth for node state. If corrupted or version-mismatched, all block data is wiped and the node restarts from genesis.
+</Warning>
+
+## Network Configurations
+
+### Regtest (Development)
+
+```bash
+core-lane-node start \
+  --bitcoin-rpc-read-url http://127.0.0.1:18443 \
+  --bitcoin-rpc-read-user bitcoin \
+  --bitcoin-rpc-read-password bitcoin123 \
+  --mnemonic-file .dev-wallets/mnemonic_regtest.txt \
+  --http-host 127.0.0.1 \
+  --http-port 8546
+```
+
+### Testnet4
+
+```bash
+core-lane-node start \
+  --bitcoin-rpc-read-url http://bitcoin-cache:8332 \
+  --bitcoin-rpc-read-user user \
+  --bitcoin-rpc-read-password <password> \
+  --electrum-url ssl://electrum.blockstream.info:40002 \
+  --mnemonic-file /secure/mnemonic.txt \
+  --http-host 0.0.0.0 \
+  --http-port 48332
+```
+
+### Mainnet
+
+```bash
+core-lane-node start \
+  --bitcoin-rpc-read-url http://bitcoin-cache:8332 \
+  --bitcoin-rpc-read-user user \
+  --bitcoin-rpc-read-password <password> \
+  --electrum-url ssl://electrum.blockstream.info:50002 \
+  --mnemonic-file /secure/mnemonic.txt \
+  --sequencer-address 0x<production-address> \
+  --http-host 0.0.0.0 \
+  --http-port 8545
+```
+
+## Docker Configuration
+
+Example Fly.io configuration for mainnet:
+
+```toml
+[env]
+  BITCOIN_CACHE_HOST = 'bitcoin-cache.internal'
+  BITCOIN_CACHE_PORT = '8545'
+  DATA_DIR = '/data'
+  ELECTRUM_URL = 'ssl://electrum.blockstream.info:50002'
+  HTTP_PORT = '8545'
+  NETWORK = 'mainnet'
+  ONLY_START = 'core-lane'
+
+[[mounts]]
+  source = 'core_lane_storage'
+  destination = '/data'
+
+[http_service]
+  internal_port = 8545
+  [[http_service.checks]]
+    interval = '15s'
+    timeout = '10s'
+    grace_period = '1m0s'
+    method = 'get'
+    path = '/health'
+```
+
+## Configuration Best Practices
+
+1. **Security**:
+   - Always use `--mnemonic-file` or environment variables for mnemonics
+   - Never commit mnemonics to version control
+   - Use separate read/write RPC endpoints when possible
+   - Change default sequencer address in production
+
+2. **Performance**:
+   - Use bitcoin-cache for production deployments
+   - Mount persistent volumes for `data-dir`
+   - Set appropriate `--start-block` to avoid full chain replay
+
+3. **Reliability**:
+   - Configure health checks at `/health`
+   - Monitor `last_block_processing_time_ms` metric
+   - Enable adequate disk space for block data
+   - Use Electrum servers for non-regtest networks
+
+4. **Monitoring**:
+   - Set `RUST_LOG=info` for production
+   - Use `RUST_LOG=debug` for troubleshooting
+   - Monitor reorg metrics via `/health` endpoint

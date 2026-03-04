@@ -1,0 +1,770 @@
+---
+title: Troubleshooting
+description: Common issues and solutions for Core Lane nodes
+---
+
+## Common Issues
+
+<Accordion title="Node fails to start">
+
+### Symptoms
+- Process exits immediately after launch
+- No response on HTTP port
+- Error messages in logs
+
+### Diagnosis
+
+```bash
+# Check logs for error messages
+journalctl -u core-lane-node --no-pager | tail -50
+
+# Or for Docker
+docker logs core-lane-node --tail 50
+
+# Test configuration
+core-lane-node start --help
+```
+
+### Common Causes
+
+**1. Missing mnemonic**
+
+Error:
+```
+ERROR: CORE_LANE_MNEMONIC is required
+```
+
+Solution:
+```bash
+# Provide mnemonic via file
+core-lane-node start --mnemonic-file /path/to/mnemonic.txt ...
+
+# Or via environment variable
+export CORE_LANE_MNEMONIC="word1 word2 ... word12"
+core-lane-node start ...
+```
+
+**2. Bitcoin RPC connection failure**
+
+Error:
+```
+Bitcoin RPC health check failed
+Failed to connect to Bitcoin RPC
+```
+
+Solution:
+```bash
+# Test Bitcoin RPC manually
+curl --user bitcoin:password \
+  --data-binary '{"jsonrpc":"1.0","method":"getblockchaininfo"}' \
+  http://127.0.0.1:18443/
+
+# Verify credentials
+bitcoin-cli -rpcuser=bitcoin -rpcpassword=password getblockchaininfo
+
+# Check firewall
+sudo ufw status
+telnet 127.0.0.1 18443
+```
+
+**3. Port already in use**
+
+Error:
+```
+Address already in use (os error 98)
+```
+
+Solution:
+```bash
+# Find process using port 8545
+sudo lsof -i :8545
+
+# Kill the process or use different port
+core-lane-node start --http-port 8546 ...
+```
+
+**4. Corrupted state file**
+
+Error:
+```
+Failed to deserialize state for block N
+Tip file has wrong version or is corrupt
+```
+
+Solution:
+```bash
+# Backup current state
+cp -r /data /data.backup
+
+# Remove corrupted tip (triggers fresh start)
+rm /data/tip
+
+# Or restore from backup
+tar -xzf /backups/core-lane-state-latest.tar.gz -C /
+```
+
+**5. Insufficient disk space**
+
+Error:
+```
+No space left on device
+```
+
+Solution:
+```bash
+# Check disk usage
+df -h /data
+
+# Free up space or add storage
+# Clean old logs
+find /var/log -name "*.log" -mtime +7 -delete
+```
+
+</Accordion>
+
+<Accordion title="Block processing stalled">
+
+### Symptoms
+- `latest_block` not advancing
+- No new transactions processed
+- Health check shows same block number over time
+
+### Diagnosis
+
+```bash
+# Check current block
+BLOCK1=$(curl -s http://localhost:8545/health | jq '.latest_block')
+
+# Wait 2 minutes
+sleep 120
+
+# Check again
+BLOCK2=$(curl -s http://localhost:8545/health | jq '.latest_block')
+
+if [ "$BLOCK1" -eq "$BLOCK2" ]; then
+  echo "Block processing is stalled"
+fi
+
+# Check Bitcoin sync status
+curl -s http://localhost:8545/health | jq '.last_processed_bitcoin_height'
+```
+
+### Common Causes
+
+**1. Bitcoin node not synced**
+
+Solution:
+```bash
+# Check Bitcoin sync progress
+bitcoin-cli getblockchaininfo | jq '.verificationprogress'
+
+# Wait for Bitcoin to sync (progress = 1.0)
+```
+
+**2. No new Bitcoin blocks**
+
+Normal behavior for regtest. For mainnet/testnet:
+```bash
+# Check Bitcoin block time
+bitcoin-cli getblockchaininfo | jq '.mediantime'
+
+# Bitcoin blocks arrive ~every 10 minutes
+# Core Lane blocks follow Bitcoin blocks
+```
+
+**3. On-demand polling enabled**
+
+If `--on-demand-polling` is set, blocks only process when triggered:
+```bash
+# Trigger block processing
+curl -X POST http://localhost:8545/do_poll
+
+# Check if blocks advanced
+curl -s http://localhost:8545/health | jq '.latest_block'
+```
+
+**4. Process deadlock**
+
+Check if process is responding:
+```bash
+# Health check
+curl -s http://localhost:8545/health
+
+# If no response, restart node
+systemctl restart core-lane-node
+```
+
+**5. Disk I/O bottleneck**
+
+```bash
+# Check I/O wait
+iostat -x 1 5
+
+# Check disk latency
+iostat -x /dev/nvme0n1 1 5
+
+# If high latency, consider faster storage
+```
+
+</Accordion>
+
+<Accordion title="High memory usage">
+
+### Symptoms
+- Process using >4GB RAM
+- System swapping
+- OOM (Out of Memory) errors
+
+### Diagnosis
+
+```bash
+# Check memory usage
+ps aux | grep core-lane-node
+
+# Check system memory
+free -h
+
+# Monitor over time
+watch -n 5 'ps aux | grep core-lane-node | awk '"'"'{print $6/1024 "MB"}'"'"''
+```
+
+### Solutions
+
+**1. Limit memory usage (systemd)**
+
+Edit `/etc/systemd/system/core-lane-node.service`:
+```ini
+[Service]
+MemoryLimit=2G
+MemoryHigh=1.5G
+```
+
+Reload and restart:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart core-lane-node
+```
+
+**2. Limit memory usage (Docker)**
+
+```bash
+docker run --memory=2g --memory-swap=2g ...
+```
+
+**3. Increase system RAM**
+
+Core Lane's memory usage grows with chain size. Recommended:
+- Development: 1-2GB
+- Testnet: 2-4GB
+- Mainnet: 4-8GB
+
+</Accordion>
+
+<Accordion title="Slow block processing">
+
+### Symptoms
+- `last_block_processing_time_ms` > 5000
+- Blocks take minutes to process
+- Chain falling behind Bitcoin tip
+
+### Diagnosis
+
+```bash
+# Check processing time
+curl -s http://localhost:8545/health | jq '.last_block_processing_time_ms'
+
+# Monitor over time
+while true; do
+  TIME=$(curl -s http://localhost:8545/health | jq '.last_block_processing_time_ms')
+  echo "$(date) Processing time: ${TIME}ms"
+  sleep 10
+done
+```
+
+### Solutions
+
+**1. Upgrade to SSD storage**
+
+Core Lane performs heavy disk I/O. SSDs provide 10-100x faster performance:
+```bash
+# Test disk speed
+dd if=/dev/zero of=/data/test bs=1M count=1000 oflag=direct
+
+# Expected: >100 MB/s for SSD, <50 MB/s for HDD
+```
+
+**2. Enable database optimizations**
+
+```bash
+# Enable WAL mode for wallet
+sqlite3 /data/wallet_mainnet.sqlite3 "PRAGMA journal_mode=WAL;"
+```
+
+**3. Reduce log verbosity**
+
+```bash
+# Change from debug to info
+export RUST_LOG=info
+systemctl restart core-lane-node
+```
+
+**4. Increase CPU allocation**
+
+For VMs/containers, allocate more CPU cores:
+```bash
+# Docker
+docker run --cpus=2 ...
+
+# Fly.io (fly.toml)
+[[vm]]
+  cpus = 2
+```
+
+</Accordion>
+
+<Accordion title="Wallet not found">
+
+### Symptoms
+- Error: "Wallet database not found"
+- Cannot retrieve addresses
+- Cannot check balance
+
+### Diagnosis
+
+```bash
+# Check if wallet file exists
+ls -la /data/wallet_*.sqlite3
+
+# Verify data directory
+echo $DATA_DIR
+ls -la $DATA_DIR
+```
+
+### Solutions
+
+**1. Create wallet**
+
+```bash
+core-lane-node create-wallet \
+  --network mainnet \
+  --data-dir /data \
+  --electrum-url ssl://electrum.blockstream.info:50002
+```
+
+**2. Restore wallet from backup**
+
+```bash
+cp /backups/wallet_mainnet.sqlite3 /data/
+chmod 600 /data/wallet_mainnet.sqlite3
+chown core-lane:core-lane /data/wallet_mainnet.sqlite3
+```
+
+**3. Verify mnemonic**
+
+```bash
+# Test mnemonic by creating temporary wallet
+core-lane-node create-wallet \
+  --network regtest \
+  --mnemonic "your twelve words here" \
+  --data-dir /tmp/test-wallet
+
+# If successful, mnemonic is valid
+```
+
+</Accordion>
+
+<Accordion title="Reorg detection issues">
+
+### Symptoms
+- Frequent reorg warnings
+- Unexpected `reorgs_detected` count
+- Block rollbacks occurring
+
+### Diagnosis
+
+```bash
+# Check reorg count
+curl -s http://localhost:8545/health | jq '.reorgs_detected'
+
+# Review reorg logs
+grep -i "reorg" /var/log/core-lane/node.log | tail -20
+
+# Check Bitcoin chain tips
+bitcoin-cli getchaintips
+```
+
+### Understanding Reorgs
+
+**Normal behavior**:
+- Mainnet: Rare (less than 1 per month)
+- Testnet: Occasional (1-5 per week due to lower hashrate)
+- Regtest with `REORG=1`: Frequent (every 7 blocks, by design)
+
+**Abnormal behavior**:
+- Mainnet reorgs every hour: indicates Bitcoin network issues or node connectivity problems
+
+### Solutions
+
+**1. For development (regtest)**
+
+Disable hazardous reorg mode:
+```bash
+# Don't set REORG=1
+REORG=0 ./scripts/dev-environment.sh start
+```
+
+**2. For production**
+
+Ensure Bitcoin node stability:
+```bash
+# Check Bitcoin peer connections
+bitcoin-cli getpeerinfo | jq 'length'
+
+# Should have >8 peers
+# If low, check network connectivity
+```
+
+**3. Manual recovery from reorg**
+
+If automatic recovery fails:
+```bash
+# Stop node
+systemctl stop core-lane-node
+
+# Restore from pre-reorg backup
+tar -xzf /backups/core-lane-state-pre-reorg.tar.gz -C /
+
+# Restart
+systemctl start core-lane-node
+```
+
+</Accordion>
+
+<Accordion title="Transaction failures">
+
+### Symptoms
+- Transactions not appearing in blocks
+- `eth_sendRawTransaction` returns errors
+- Receipts show `status: "0x0"` (failure)
+
+### Diagnosis
+
+```bash
+# Send test transaction
+curl -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc":"2.0",
+    "method":"eth_sendRawTransaction",
+    "params":["0x..."],
+    "id":1
+  }'
+
+# Check transaction receipt
+curl -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc":"2.0",
+    "method":"eth_getTransactionReceipt",
+    "params":["0x<txhash>"],
+    "id":1
+  }'
+```
+
+### Common Causes
+
+**1. Insufficient balance**
+
+Error in receipt: "Insufficient balance"
+
+Solution:
+```bash
+# Check balance
+curl -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc":"2.0",
+    "method":"eth_getBalance",
+    "params":["0x<address>", "latest"],
+    "id":1
+  }'
+
+# Burn BTC to mint tokens
+core-lane-node burn \
+  --burn-amount 1000000 \
+  --chain-id 1281453634 \
+  --eth-address 0x<address> \
+  ...
+```
+
+**2. Invalid nonce**
+
+Error: "Invalid nonce"
+
+Solution:
+```bash
+# Check current nonce
+curl -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc":"2.0",
+    "method":"eth_getTransactionCount",
+    "params":["0x<address>", "latest"],
+    "id":1
+  }'
+
+# Use returned nonce in next transaction
+```
+
+**3. Gas limit too low**
+
+Error: "Out of gas"
+
+Solution:
+```bash
+# Increase gas limit in transaction
+# Estimate gas first:
+curl -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc":"2.0",
+    "method":"eth_estimateGas",
+    "params":[{...}],
+    "id":1
+  }'
+```
+
+**4. Base fee too low**
+
+Error: "Base fee too low"
+
+Solution:
+```bash
+# Check current base fee
+curl -s http://localhost:8545/health | jq '.current_base_fee_gwei'
+
+# Ensure maxFeePerGas >= current_base_fee
+```
+
+</Accordion>
+
+<Accordion title="RPC connection issues">
+
+### Symptoms
+- Cannot connect to JSON-RPC endpoint
+- Connection timeout
+- Connection refused
+
+### Diagnosis
+
+```bash
+# Test local connection
+curl -v http://localhost:8545/health
+
+# Test remote connection
+curl -v http://<node-ip>:8545/health
+
+# Check if port is listening
+sudo netstat -tlnp | grep 8545
+
+# Check firewall
+sudo ufw status
+```
+
+### Solutions
+
+**1. Bind to correct interface**
+
+```bash
+# Bind to all interfaces (for remote access)
+core-lane-node start --http-host 0.0.0.0 ...
+
+# Or bind to specific IP
+core-lane-node start --http-host 192.168.1.100 ...
+```
+
+**2. Open firewall port**
+
+```bash
+# Allow RPC port
+sudo ufw allow 8545/tcp
+
+# Or allow from specific IP
+sudo ufw allow from 192.168.1.0/24 to any port 8545
+```
+
+**3. Check reverse proxy (if used)**
+
+```bash
+# Nginx example
+sudo nginx -t
+sudo systemctl status nginx
+
+# Check Nginx logs
+sudo tail -f /var/log/nginx/error.log
+```
+
+</Accordion>
+
+## Error Messages
+
+### State/Persistence Errors
+
+**"Failed to deserialize state for block N"**
+- **Cause**: Corrupted state file
+- **Solution**: Restore from backup or wipe state to restart from genesis
+
+**"Tip file has wrong version or is corrupt"**
+- **Cause**: Tip version mismatch after upgrade or corruption
+- **Solution**: Remove tip file (triggers full state wipe and genesis restart)
+
+**"State file not found for block N"**
+- **Cause**: Missing state file, incomplete backup restore
+- **Solution**: Restore complete backup or start fresh
+
+**"No space left on device"**
+- **Cause**: Disk full
+- **Solution**: Free up disk space or expand storage
+
+### Bitcoin RPC Errors
+
+**"Bitcoin RPC health check failed"**
+- **Cause**: Bitcoin node unreachable or not responding
+- **Solution**: Verify Bitcoin RPC URL, credentials, and network connectivity
+
+**"Failed to connect to Bitcoin RPC"**
+- **Cause**: Connection refused, wrong URL, firewall blocking
+- **Solution**: Test Bitcoin RPC manually, check firewall rules
+
+### Wallet Errors
+
+**"Wallet database not found"**
+- **Cause**: Wallet not created for this network
+- **Solution**: Run `create-wallet` command
+
+**"Invalid mnemonic"**
+- **Cause**: Mnemonic phrase is incorrect or corrupted
+- **Solution**: Verify mnemonic from backup, check for typos
+
+**"Failed to create wallet"**
+- **Cause**: Database error, permission issue
+- **Solution**: Check data directory permissions, disk space
+
+### Transaction Errors
+
+**"Insufficient balance"**
+- **Cause**: Account balance < transaction value + fees
+- **Solution**: Burn more BTC or reduce transaction value
+
+**"Invalid nonce"**
+- **Cause**: Nonce mismatch (too low or too high)
+- **Solution**: Query current nonce with `eth_getTransactionCount`
+
+**"Gas limit too low"**
+- **Cause**: Transaction requires more gas than specified
+- **Solution**: Increase gas limit or use `eth_estimateGas`
+
+## Diagnostic Commands
+
+### System Information
+
+```bash
+# Node version
+core-lane-node --version
+
+# System resources
+free -h
+df -h /data
+lscpu | grep "Model name"
+
+# Network connectivity
+ping -c 3 8.8.8.8
+curl -I https://blockstream.info
+```
+
+### Node Status
+
+```bash
+# Health check
+curl -s http://localhost:8545/health | jq '.'
+
+# Latest block
+curl -s http://localhost:8545/health | jq '.latest_block'
+
+# Processing time
+curl -s http://localhost:8545/health | jq '.last_block_processing_time_ms'
+
+# Reorg count
+curl -s http://localhost:8545/health | jq '.reorgs_detected'
+```
+
+### State Inspection
+
+```bash
+# Check data directory structure
+tree -L 2 /data
+
+# Block count
+ls /data/blocks | wc -l
+
+# Latest block file
+ls -lh /data/blocks | tail -5
+
+# Tip file
+ls -lh /data/tip
+
+# Wallet databases
+ls -lh /data/wallet_*.sqlite3
+```
+
+### Bitcoin RPC
+
+```bash
+# Blockchain info
+curl --user bitcoin:password \
+  --data-binary '{"jsonrpc":"1.0","method":"getblockchaininfo"}' \
+  http://127.0.0.1:18443/ | jq '.result'
+
+# Peer count
+curl --user bitcoin:password \
+  --data-binary '{"jsonrpc":"1.0","method":"getconnectioncount"}' \
+  http://127.0.0.1:18443/ | jq '.result'
+```
+
+## Getting Help
+
+If you cannot resolve an issue:
+
+1. **Collect diagnostic information**:
+   ```bash
+   # Create diagnostic report
+   cat > diagnostic-report.txt <<EOF
+   Node Version: $(core-lane-node --version)
+   OS: $(uname -a)
+   
+   Health Check:
+   $(curl -s http://localhost:8545/health | jq '.')
+   
+   Recent Logs:
+   $(journalctl -u core-lane-node --no-pager | tail -100)
+   
+   Disk Usage:
+   $(df -h /data)
+   
+   Data Directory:
+   $(ls -lh /data)
+   EOF
+   ```
+
+2. **Check documentation**: Review [Node Configuration](/operations/node-configuration) and [Monitoring](/operations/monitoring)
+
+3. **Search existing issues**: Check GitHub issues for similar problems
+
+4. **Ask for help**: 
+   - GitHub Discussions
+   - Discord community
+   - File a GitHub issue with diagnostic report
+
+<Warning>
+  Never share your mnemonic phrase when asking for help. Redact all sensitive information from logs and diagnostic reports.
+</Warning>
